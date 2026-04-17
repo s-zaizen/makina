@@ -55,9 +55,12 @@ pub fn init_db() -> Result<()> {
             language TEXT NOT NULL,
             findings_json TEXT NOT NULL DEFAULT '[]',
             submitted_at TEXT NOT NULL,
+            verified_at TEXT,
             status TEXT NOT NULL DEFAULT 'pending'
         );",
     )?;
+    // Safe migration: add verified_at to pre-existing databases
+    let _ = conn.execute("ALTER TABLE verify_queue ADD COLUMN verified_at TEXT", []);
     Ok(())
 }
 
@@ -165,9 +168,33 @@ pub fn get_queue_items() -> Result<Vec<QueueItem>> {
 
 pub fn mark_queue_done(case_no: i64) -> Result<()> {
     let conn = open()?;
+    let now = Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE verify_queue SET status = 'done' WHERE case_no = ?1",
-        params![case_no],
+        "UPDATE verify_queue SET status = 'done', verified_at = ?1 WHERE case_no = ?2",
+        params![now, case_no],
     )?;
     Ok(())
+}
+
+pub fn get_done_items() -> Result<Vec<QueueItem>> {
+    let conn = open()?;
+    // verified_at may be NULL for rows done before this column existed; fall back to submitted_at
+    let mut stmt = conn.prepare(
+        "SELECT case_no, cve_id, code, language, findings_json,
+                COALESCE(verified_at, submitted_at) as ts
+         FROM verify_queue WHERE status = 'done' ORDER BY case_no DESC",
+    )?;
+    let items = stmt
+        .query_map([], |row| {
+            Ok(QueueItem {
+                case_no: row.get(0)?,
+                cve_id: row.get(1)?,
+                code: row.get(2)?,
+                language: row.get(3)?,
+                findings_json: row.get(4)?,
+                submitted_at: row.get(5)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(items)
 }

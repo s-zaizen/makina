@@ -63,9 +63,14 @@ export interface FileNode {
 
 export interface VerifiedEntry {
   caseNo: number;
+  cveId?: string | null;
   verifiedAt: string;
   language: Language;
   findingCount: number;
   tpCount: number;
   fpCount: number;
+  maxSeverity: Severity | null;
+  cwes: string[];
+  ruleIds: string[];
+  avgConfidence: number;
 }

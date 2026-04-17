@@ -333,6 +333,29 @@ pub async fn stats() -> Result<impl IntoResponse, (StatusCode, String)> {
 
 // ── Verify queue ──────────────────────────────────────────────────────────────
 
+pub async fn get_verified() -> Result<impl IntoResponse, (StatusCode, String)> {
+    let items = store::get_done_items()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let cases: Vec<VerifyQueueCase> = items
+        .into_iter()
+        .map(|item| {
+            let findings: Vec<Finding> =
+                serde_json::from_str(&item.findings_json).unwrap_or_default();
+            VerifyQueueCase {
+                case_no: item.case_no,
+                cve_id: item.cve_id,
+                code: item.code,
+                language: item.language,
+                findings,
+                submitted_at: item.submitted_at,
+            }
+        })
+        .collect();
+
+    Ok(Json(cases))
+}
+
 pub async fn get_queue() -> Result<impl IntoResponse, (StatusCode, String)> {
     let items = store::get_queue_items()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

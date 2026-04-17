@@ -104,3 +104,10 @@ export async function removeFromVerifyQueue(caseNo: number): Promise<void> {
   const res = await fetch(`${BASE}/api/verify/queue/${caseNo}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Queue remove failed: ${res.status}`);
 }
+
+export async function getVerifiedHistory(): Promise<VerifyCase[]> {
+  const res = await fetch(`${BASE}/api/verify/done`);
+  if (!res.ok) throw new Error(`Verified history failed: ${res.status}`);
+  const items: BackendVerifyCase[] = await res.json();
+  return items.map(mapCase);
+}

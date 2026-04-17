@@ -7,7 +7,7 @@ import { KnowledgeTab } from "../components/KnowledgeTab";
 import { ScanPanel } from "../components/ScanPanel";
 import { StatusBar } from "../components/StatusBar";
 import { VerifyTab } from "../components/VerifyTab";
-import { scanCode, submitFeedback, getStats, getVerifyQueue, addToVerifyQueue, removeFromVerifyQueue } from "../lib/api";
+import { scanCode, submitFeedback, getStats, getVerifyQueue, addToVerifyQueue, removeFromVerifyQueue, getVerifiedHistory } from "../lib/api";
 import { readFolder, flatFiles } from "../lib/folder";
 import type { Finding, Language, Label, Stats, Severity, VerifyCase, VerifiedEntry, FileNode } from "../lib/types";
 
@@ -207,6 +207,27 @@ export default function Home() {
   useEffect(() => {
     refreshStats();
     getVerifyQueue().then(setVerifyCases).catch(() => {});
+    getVerifiedHistory().then((cases) => {
+      const entries = cases.map((vc) => {
+        const sevOrder: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+        const maxSeverity = vc.findings.reduce<import("../lib/types").Severity | null>((acc, f) => {
+          if (!acc || sevOrder[f.severity] > sevOrder[acc]) return f.severity;
+          return acc;
+        }, null);
+        const cwes = Array.from(new Set(vc.findings.map((f) => f.cwe).filter((c): c is string => c !== null)));
+        const ruleIds = Array.from(new Set(vc.findings.map((f) => f.rule_id)));
+        const avgConfidence = vc.findings.length > 0
+          ? vc.findings.reduce((s, f) => s + f.confidence, 0) / vc.findings.length : 0;
+        return {
+          caseNo: vc.caseNo, cveId: vc.cveId,
+          verifiedAt: vc.submittedAt,
+          language: vc.language, findingCount: vc.findings.length,
+          tpCount: 0, fpCount: 0,
+          maxSeverity, cwes, ruleIds, avgConfidence,
+        } satisfies import("../lib/types").VerifiedEntry;
+      });
+      setKnowledgeHistory(entries);
+    }).catch(() => {});
   }, [refreshStats]);
 
   const handleLanguageChange = (lang: Language) => {
@@ -270,13 +291,30 @@ export default function Home() {
 
     const tpCount = labeledEntries.filter(([, l]) => l === "tp").length;
     const fpCount = labeledEntries.filter(([, l]) => l === "fp").length;
+
+    const sevOrder: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+    const maxSeverity = vc.findings.reduce<import("../lib/types").Severity | null>((acc, f) => {
+      if (!acc || sevOrder[f.severity] > sevOrder[acc]) return f.severity;
+      return acc;
+    }, null);
+    const cwes = Array.from(new Set(vc.findings.map((f) => f.cwe).filter((c): c is string => c !== null)));
+    const ruleIds = Array.from(new Set(vc.findings.map((f) => f.rule_id)));
+    const avgConfidence = vc.findings.length > 0
+      ? vc.findings.reduce((s, f) => s + f.confidence, 0) / vc.findings.length
+      : 0;
+
     const entry: VerifiedEntry = {
       caseNo: vc.caseNo,
+      cveId: vc.cveId,
       verifiedAt: new Date().toISOString(),
       language: vc.language,
       findingCount: vc.findings.length,
       tpCount,
       fpCount,
+      maxSeverity,
+      cwes,
+      ruleIds,
+      avgConfidence,
     };
     setKnowledgeHistory((prev) => [entry, ...prev]);
     setVerifyCases((prev) => prev.filter((c) => c.caseNo !== caseNo));
