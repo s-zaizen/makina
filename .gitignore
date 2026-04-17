@@ -1,0 +1,51 @@
+# Rust
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+.ruff_cache/
+.mypy_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.env.local
+.env*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ML model artifacts (generated at runtime)
+*.json.bak
+ml/deus_ml/models/__pycache__/
+
+# Database & runtime data
+*.db
+*.db-shm
+*.db-wal
+.deus/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.docker/
+
+# Misc
+PLAN.md

@@ -130,5 +130,7 @@ deus/
 │       └── components/    CodeEditor, FileTree, VerifyTab, KnowledgeTab …
 ├── import_cves.py         Import trickest/cve MDs into verify queue
 ├── import_100_cves.py     Batch import 100 CVE cases + auto-label
-└── ARCHITECTURE.md        this file
+├── CLAUDE.md              AI assistant instructions for this repo
+├── CONTRIBUTING.md        Commit conventions, dev setup, code style
+└── docs/ARCHITECTURE.md   this file
 ```
