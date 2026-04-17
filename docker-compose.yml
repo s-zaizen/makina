@@ -1,0 +1,57 @@
+services:
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    ports:
+      - "7373:7373"
+    volumes:
+      - deus-data:/root/.deus
+    environment:
+      - DEUS_ML_URL=http://ml:8080
+    depends_on:
+      ml:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7373/api/stats || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:7373
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ml:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ml
+    volumes:
+      - deus-data:/root/.deus
+    environment:
+      - DEUS_DB=/root/.deus/feedback.db
+      - DEUS_MODEL=/root/.deus/model.json
+      - DEUS_MODELS=/root/.deus/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  deus-data:

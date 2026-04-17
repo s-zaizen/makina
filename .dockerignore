@@ -1,0 +1,9 @@
+target/
+frontend/node_modules/
+frontend/.next/
+ml/__pycache__/
+ml/**/__pycache__/
+ml/*.egg-info/
+.git/
+.DS_Store
+*.md
