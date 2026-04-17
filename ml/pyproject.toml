@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deus-ml"
+version = "0.1.0"
+description = "deus ML training layer"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "xgboost>=2.0.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",
+    "pydantic>=2.6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["deus_ml"]

@@ -1,0 +1,281 @@
+rules:
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+
+- id: taint-python-sqli
+  mode: taint
+  pattern-sources:
+    - pattern: flask.request.args.get(...)
+    - pattern: flask.request.form.get(...)
+    - pattern: flask.request.json
+    - pattern: flask.request.data
+    - pattern: django.request.GET.get(...)
+    - pattern: django.request.POST.get(...)
+    - pattern: request.args.get(...)
+    - pattern: request.form.get(...)
+    - pattern: request.json
+    - pattern: input(...)
+    - pattern: sys.stdin.read(...)
+    - pattern: sys.stdin.readline(...)
+  pattern-sinks:
+    - pattern: $OBJ.execute(...)
+    - pattern: $OBJ.executemany(...)
+    - pattern: $OBJ.raw(...)
+    - pattern: $OBJ.query(...)
+    - pattern: $OBJ.filter(...)
+  message: >-
+    SQL Injection (taint): user-controlled input flows into a database query.
+    Track the taint path across function calls.
+  languages: [python]
+  severity: ERROR
+  metadata:
+    cwe: CWE-89
+    category: security
+    confidence: HIGH
+
+- id: taint-python-cmdi
+  mode: taint
+  pattern-sources:
+    - pattern: flask.request.args.get(...)
+    - pattern: flask.request.form.get(...)
+    - pattern: request.args.get(...)
+    - pattern: request.form.get(...)
+    - pattern: input(...)
+    - pattern: sys.argv[...]
+    - pattern: os.environ.get(...)
+  pattern-sinks:
+    - pattern: os.system(...)
+    - pattern: os.popen(...)
+    - pattern: subprocess.call(...)
+    - pattern: subprocess.run(...)
+    - pattern: subprocess.Popen(...)
+    - pattern: subprocess.check_output(...)
+    - pattern: commands.getoutput(...)
+  message: >-
+    Command Injection (taint): user-controlled input flows into a shell command.
+    Track the taint path across function calls.
+  languages: [python]
+  severity: ERROR
+  metadata:
+    cwe: CWE-78
+    category: security
+    confidence: HIGH
+
+- id: taint-python-code-injection
+  mode: taint
+  pattern-sources:
+    - pattern: flask.request.args.get(...)
+    - pattern: flask.request.form.get(...)
+    - pattern: request.args.get(...)
+    - pattern: request.form.get(...)
+    - pattern: request.json
+    - pattern: input(...)
+  pattern-sinks:
+    - pattern: eval(...)
+    - pattern: exec(...)
+    - pattern: compile(...)
+    - pattern: __import__(...)
+    - pattern: importlib.import_module(...)
+  message: >-
+    Code Injection (taint): user-controlled input flows into eval/exec/import.
+    Track the taint path across function calls.
+  languages: [python]
+  severity: ERROR
+  metadata:
+    cwe: CWE-94
+    category: security
+    confidence: HIGH
+
+- id: taint-python-ssrf
+  mode: taint
+  pattern-sources:
+    - pattern: flask.request.args.get(...)
+    - pattern: flask.request.form.get(...)
+    - pattern: request.args.get(...)
+    - pattern: request.form.get(...)
+    - pattern: request.json
+    - pattern: input(...)
+  pattern-sinks:
+    - pattern: requests.get(...)
+    - pattern: requests.post(...)
+    - pattern: requests.request(...)
+    - pattern: urllib.request.urlopen(...)
+    - pattern: urllib.request.urlretrieve(...)
+    - pattern: httpx.get(...)
+    - pattern: httpx.post(...)
+    - pattern: aiohttp.ClientSession().get(...)
+  message: >-
+    SSRF (taint): user-controlled input flows into an outbound HTTP request.
+    Track the taint path across function calls.
+  languages: [python]
+  severity: ERROR
+  metadata:
+    cwe: CWE-918
+    category: security
+    confidence: HIGH
+
+- id: taint-python-path-traversal
+  mode: taint
+  pattern-sources:
+    - pattern: flask.request.args.get(...)
+    - pattern: flask.request.form.get(...)
+    - pattern: request.args.get(...)
+    - pattern: request.form.get(...)
+    - pattern: input(...)
+  pattern-sinks:
+    - pattern: open(...)
+    - pattern: os.path.join(...)
+    - pattern: pathlib.Path(...)
+    - pattern: shutil.copy(...)
+    - pattern: shutil.move(...)
+  message: >-
+    Path Traversal (taint): user-controlled input flows into a file path operation.
+    Track the taint path across function calls.
+  languages: [python]
+  severity: WARNING
+  metadata:
+    cwe: CWE-22
+    category: security
+    confidence: MEDIUM
+
+# ─── JavaScript / TypeScript ─────────────────────────────────────────────────
+
+- id: taint-js-sqli
+  mode: taint
+  pattern-sources:
+    - pattern: req.query.$X
+    - pattern: req.body.$X
+    - pattern: req.params.$X
+    - pattern: request.query.$X
+    - pattern: request.body.$X
+  pattern-sinks:
+    - pattern: $DB.query(...)
+    - pattern: $DB.execute(...)
+    - pattern: $POOL.query(...)
+    - pattern: $CONN.query(...)
+    - pattern: $KNEX.raw(...)
+    - pattern: $SEQ.query(...)
+  message: >-
+    SQL Injection (taint): user-controlled input flows into a database query.
+    Track the taint path across function calls.
+  languages: [javascript, typescript]
+  severity: ERROR
+  metadata:
+    cwe: CWE-89
+    category: security
+    confidence: HIGH
+
+- id: taint-js-cmdi
+  mode: taint
+  pattern-sources:
+    - pattern: req.query.$X
+    - pattern: req.body.$X
+    - pattern: req.params.$X
+  pattern-sinks:
+    - pattern: exec(...)
+    - pattern: execSync(...)
+    - pattern: spawn(...)
+    - pattern: spawnSync(...)
+    - pattern: child_process.exec(...)
+    - pattern: child_process.execSync(...)
+    - pattern: child_process.spawn(...)
+  message: >-
+    Command Injection (taint): user-controlled input flows into a shell command.
+    Track the taint path across function calls.
+  languages: [javascript, typescript]
+  severity: ERROR
+  metadata:
+    cwe: CWE-78
+    category: security
+    confidence: HIGH
+
+- id: taint-js-xss
+  mode: taint
+  pattern-sources:
+    - pattern: req.query.$X
+    - pattern: req.body.$X
+    - pattern: req.params.$X
+  pattern-sinks:
+    - pattern: res.send(...)
+    - pattern: res.write(...)
+    - pattern: $EL.innerHTML = ...
+    - pattern: document.write(...)
+    - pattern: $EL.outerHTML = ...
+  message: >-
+    XSS (taint): user-controlled input flows into HTML output without sanitization.
+    Track the taint path across function calls.
+  languages: [javascript, typescript]
+  severity: ERROR
+  metadata:
+    cwe: CWE-79
+    category: security
+    confidence: MEDIUM
+
+- id: taint-js-ssrf
+  mode: taint
+  pattern-sources:
+    - pattern: req.query.$X
+    - pattern: req.body.$X
+    - pattern: req.params.$X
+  pattern-sinks:
+    - pattern: fetch(...)
+    - pattern: axios.get(...)
+    - pattern: axios.post(...)
+    - pattern: axios.request(...)
+    - pattern: http.get(...)
+    - pattern: https.get(...)
+    - pattern: request(...)
+  message: >-
+    SSRF (taint): user-controlled input flows into an outbound HTTP request.
+    Track the taint path across function calls.
+  languages: [javascript, typescript]
+  severity: ERROR
+  metadata:
+    cwe: CWE-918
+    category: security
+    confidence: HIGH
+
+# ─── Go ──────────────────────────────────────────────────────────────────────
+
+- id: taint-go-sqli
+  mode: taint
+  pattern-sources:
+    - pattern: $R.URL.Query().Get(...)
+    - pattern: $R.FormValue(...)
+    - pattern: $R.PostFormValue(...)
+    - pattern: $R.Header.Get(...)
+  pattern-sinks:
+    - pattern: $DB.Query(...)
+    - pattern: $DB.QueryRow(...)
+    - pattern: $DB.Exec(...)
+    - pattern: $TX.Query(...)
+    - pattern: $TX.Exec(...)
+  message: >-
+    SQL Injection (taint): user-controlled input flows into a database query.
+    Track the taint path across function calls.
+  languages: [go]
+  severity: ERROR
+  metadata:
+    cwe: CWE-89
+    category: security
+    confidence: HIGH
+
+- id: taint-go-cmdi
+  mode: taint
+  pattern-sources:
+    - pattern: $R.URL.Query().Get(...)
+    - pattern: $R.FormValue(...)
+    - pattern: $R.PostFormValue(...)
+  pattern-sinks:
+    - pattern: exec.Command(...)
+    - pattern: exec.CommandContext(...)
+    - pattern: os.StartProcess(...)
+  message: >-
+    Command Injection (taint): user-controlled input flows into a command execution.
+    Track the taint path across function calls.
+  languages: [go]
+  severity: ERROR
+  metadata:
+    cwe: CWE-78
+    category: security
+    confidence: HIGH
