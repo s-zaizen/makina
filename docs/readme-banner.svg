@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <radialGradient id="bg" cx="38%" cy="50%" r="60%">
+      <stop offset="0%"   stop-color="#0d1225"/>
+      <stop offset="100%" stop-color="#060a12"/>
+    </radialGradient>
+    <radialGradient id="eyeHalo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#312e81" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#060a12" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="pupilGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#d1fae5"/>
+      <stop offset="35%"  stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </radialGradient>
+    <radialGradient id="irisGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#080c15"/>
+    </radialGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="emeraldGlow">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="eyeGlowLarge">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="textGlow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="irisClipL">
+      <circle cx="0" cy="0" r="148"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+
+  <!-- Subtle horizontal scan lines across full background -->
+  <g opacity="0.04">
+    <line x1="0" y1="80"  x2="1280" y2="80"  stroke="#6366f1" stroke-width="1"/>
+    <line x1="0" y1="160" x2="1280" y2="160" stroke="#6366f1" stroke-width="1"/>
+    <line x1="0" y1="240" x2="1280" y2="240" stroke="#6366f1" stroke-width="1"/>
+    <line x1="0" y1="320" x2="1280" y2="320" stroke="#6366f1" stroke-width="1"/>
+    <line x1="0" y1="400" x2="1280" y2="400" stroke="#6366f1" stroke-width="1"/>
+    <line x1="0" y1="480" x2="1280" y2="480" stroke="#6366f1" stroke-width="1"/>
+    <line x1="0" y1="560" x2="1280" y2="560" stroke="#6366f1" stroke-width="1"/>
+  </g>
+
+  <!-- Eye ambient halo -->
+  <circle cx="310" cy="320" r="260" fill="url(#eyeHalo)" filter="url(#eyeGlowLarge)"/>
+
+  <!-- ═══════════════════════════════════════════
+       EYE ICON  (100×100 → 600×600, scale=6)
+       centered at (310, 320), translate(310-300, 320-300) = (10, 20)
+       ═══════════════════════════════════════════ -->
+  <g transform="translate(10, 20) scale(6)">
+    <!-- Eye ambient glow -->
+    <path d="M15,50 C20,34 34,21 50,21 C66,21 80,34 85,50 C80,66 66,79 50,79 C34,79 20,66 15,50 Z"
+          fill="none" stroke="#4338ca" stroke-width="5" opacity="0.14" filter="url(#eyeGlowLarge)"/>
+    <!-- Eye fill -->
+    <path d="M15,50 C20,34 34,21 50,21 C66,21 80,34 85,50 C80,66 66,79 50,79 C34,79 20,66 15,50 Z"
+          fill="#080c15" stroke="#4338ca" stroke-width="1.1" opacity="0.9"/>
+    <!-- Iris -->
+    <circle cx="50" cy="50" r="18.5" fill="url(#irisGrad)"/>
+    <circle cx="50" cy="50" r="18.5" fill="none" stroke="#4338ca" stroke-width="1"/>
+    <!-- Scan lines in iris -->
+    <g opacity="0.7">
+      <line x1="31.5" y1="44" x2="68.5" y2="44" stroke="#4338ca" stroke-width="0.5"/>
+      <line x1="31.5" y1="56" x2="68.5" y2="56" stroke="#4338ca" stroke-width="0.5"/>
+      <line x1="38"   y1="42.3" x2="38"   y2="45.7" stroke="#818cf8" stroke-width="0.8"/>
+      <line x1="50"   y1="42.3" x2="50"   y2="45.7" stroke="#818cf8" stroke-width="0.8"/>
+      <line x1="62"   y1="42.3" x2="62"   y2="45.7" stroke="#818cf8" stroke-width="0.8"/>
+      <line x1="38"   y1="54.3" x2="38"   y2="57.7" stroke="#818cf8" stroke-width="0.8"/>
+      <line x1="50"   y1="54.3" x2="50"   y2="57.7" stroke="#818cf8" stroke-width="0.8"/>
+      <line x1="62"   y1="54.3" x2="62"   y2="57.7" stroke="#818cf8" stroke-width="0.8"/>
+      <line x1="50" y1="33" x2="50" y2="67" stroke="#312e81" stroke-width="0.4" opacity="0.5"/>
+    </g>
+    <!-- Rings -->
+    <circle cx="50" cy="50" r="14.5" fill="none" stroke="#4f46e5"
+            stroke-width="0.6" stroke-dasharray="4 2.2" opacity="0.75"/>
+    <circle cx="50" cy="50" r="9.5"  fill="none" stroke="#6366f1" stroke-width="0.55" opacity="0.55"/>
+    <!-- Node dots -->
+    <circle cx="31.5" cy="44" r="1.5" fill="#6366f1" filter="url(#glow)"/>
+    <circle cx="68.5" cy="44" r="1.5" fill="#6366f1" filter="url(#glow)"/>
+    <circle cx="31.5" cy="56" r="1.5" fill="#6366f1" filter="url(#glow)"/>
+    <circle cx="68.5" cy="56" r="1.5" fill="#6366f1" filter="url(#glow)"/>
+    <!-- Pupil -->
+    <circle cx="50" cy="50" r="6.8" fill="#030712"/>
+    <circle cx="50" cy="50" r="5.2" fill="url(#pupilGlow)" filter="url(#emeraldGlow)"/>
+    <circle cx="50" cy="50" r="2.2" fill="#d1fae5"/>
+    <ellipse cx="47.6" cy="47.6" rx="1.2" ry="0.8"
+             fill="white" opacity="0.75" transform="rotate(-30 47.6 47.6)"/>
+    <!-- Corner dots -->
+    <circle cx="15.5" cy="50" r="2" fill="#4f46e5" filter="url(#glow)" opacity="0.85"/>
+    <circle cx="84.5" cy="50" r="2" fill="#4f46e5" filter="url(#glow)" opacity="0.85"/>
+    <!-- Eyelid highlight -->
+    <path d="M22,42 C32,28 68,28 78,42"
+          fill="none" stroke="#a5b4fc" stroke-width="0.5" opacity="0.25"/>
+  </g>
+
+  <!-- Vertical separator -->
+  <line x1="600" y1="100" x2="600" y2="540" stroke="#1a2540" stroke-width="1.5"/>
+  <!-- Separator glow dots -->
+  <circle cx="600" cy="100" r="3" fill="#4338ca" opacity="0.6"/>
+  <circle cx="600" cy="540" r="3" fill="#4338ca" opacity="0.6"/>
+
+  <!-- ═══════════════════════════════════════════
+       TEXT CONTENT  (right panel, x=640–1240)
+       ═══════════════════════════════════════════ -->
+
+  <!-- "deus" main title -->
+  <!-- Shadow/glow layer -->
+  <text x="648" y="310"
+        font-family="'SF Mono','Cascadia Code','JetBrains Mono',ui-monospace,monospace"
+        font-size="200" font-weight="700" letter-spacing="-6"
+        fill="#4f46e5" opacity="0.25" filter="url(#textGlow)">deus</text>
+  <!-- Main text -->
+  <text x="648" y="310"
+        font-family="'SF Mono','Cascadia Code','JetBrains Mono',ui-monospace,monospace"
+        font-size="200" font-weight="700" letter-spacing="-6"
+        fill="#e2e8f0">deus</text>
+
+</svg>

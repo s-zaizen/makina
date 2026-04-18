@@ -360,6 +360,7 @@ char* getBuffer(int size) {
 
 	<!-- Header -->
 	<div class="flex items-center gap-3 h-11 px-4 bg-gray-900 border-b border-gray-800 shrink-0">
+		<img src="/favicon.svg" alt="deus" class="w-5 h-5" />
 		<span class="text-sm font-bold text-gray-100 tracking-tight">deus</span>
 		<div class="w-px h-4 bg-gray-700 mx-1"></div>
 
