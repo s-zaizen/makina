@@ -7,16 +7,16 @@ __pycache__/
 *.pyo
 .venv/
 venv/
-.env
 *.egg-info/
 dist/
 .ruff_cache/
 .mypy_cache/
 
-# Node / Next.js
+# Node / SvelteKit
 node_modules/
-.next/
-out/
+.svelte-kit/
+build/
+*.tsbuildinfo
 .env.local
 .env*.local
 npm-debug.log*

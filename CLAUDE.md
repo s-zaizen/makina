@@ -4,7 +4,7 @@ Instructions for AI assistants working in this repository.
 
 ## Project in One Sentence
 
-**deus** is a security scanner (Rust API + Python ML + Next.js UI) that continuously self-learns from human TP/FP labels submitted via the Verify tab. The GBDT model retrains on every Verify Submit.
+**deus** is a security scanner (Rust API + Python ML + SvelteKit UI) that continuously self-learns from human TP/FP labels submitted via the Verify tab. The GBDT model retrains on every Verify Submit.
 
 ## Key Invariants
 

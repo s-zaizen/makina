@@ -17,7 +17,7 @@ docker compose logs -f
 # Rebuild a single service after code changes
 docker compose up -d --build backend   # Rust API
 docker compose up -d --build ml        # Python ML
-docker compose up -d --build frontend  # Next.js UI
+docker compose up -d --build frontend  # SvelteKit UI
 ```
 
 ## Project Layout
@@ -25,7 +25,7 @@ docker compose up -d --build frontend  # Next.js UI
 ```
 crates/deus/   Rust core — axum API, SQLite, scan orchestration
 ml/            Python ML service — CodeBERT, GBDT, semgrep, taint
-frontend/      Next.js UI — Scan / Verify / Knowledge tabs
+frontend/      SvelteKit UI — Scan / Verify / Knowledge tabs
 docs/          Architecture and design documentation
 .claude/       Claude Code configuration
   commands/    Slash commands — vuln-add, vuln-verify, vuln-add-verify-with-claude
@@ -64,7 +64,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 |--------------|----------------------------|
 | `backend`    | Rust crate                 |
 | `ml`         | Python ML service          |
-| `frontend`   | Next.js app                |
+| `frontend`   | SvelteKit app              |
 | `.claude`    | Claude Code slash commands |
 | `api`        | HTTP API contract changes  |
 | `verify`     | Verify queue / labeling    |

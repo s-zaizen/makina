@@ -10,7 +10,7 @@ Label count is a maturity indicator, not a capability gate.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Browser (Next.js)                                  │
+│  Browser (SvelteKit)                                │
 │  Scan tab → Verify tab → Knowledge tab              │
 └────────────────────┬────────────────────────────────┘
                      │ HTTP
@@ -19,6 +19,7 @@ Label count is a maturity indicator, not a capability gate.
 │  - /api/scan                                        │
 │  - /api/feedback                                    │
 │  - /api/verify/queue  (GET / POST / DELETE)         │
+│  - /api/verify/done   (GET — verified history)      │
 │  - /api/stats                                       │
 │  SQLite  ~/.deus/feedback.db                        │
 └──────────┬──────────────────────────────────────────┘
@@ -99,11 +100,12 @@ created_at TEXT
 
 -- verify_queue: human review queue
 case_no INTEGER PRIMARY KEY AUTOINCREMENT
-cve_id TEXT                -- optional CVE identifier
+cve_id TEXT                -- optional CVE identifier (not shown in UI)
 code TEXT
 language TEXT
 findings_json TEXT         -- JSON array of Finding objects
 submitted_at TEXT
+verified_at TEXT           -- set when Verify Submit is called
 status TEXT                -- 'pending' | 'done'
 ```
 
@@ -124,12 +126,15 @@ deus/
 │       ├── call_graph.py  call graph extraction (AST + regex fallback)
 │       ├── features.py    50-element hand-crafted feature vector
 │       └── semgrep_scanner.py  semgrep wrapper + language detection
-├── frontend/              Next.js UI
+├── frontend/              SvelteKit UI (Svelte 5 Runes, adapter-node)
 │   └── src/
-│       ├── app/page.tsx   main layout + state
-│       └── components/    CodeEditor, FileTree, VerifyTab, KnowledgeTab …
-├── import_cves.py         Import trickest/cve MDs into verify queue
-├── import_100_cves.py     Batch import 100 CVE cases + auto-label
+│       ├── routes/        +page.svelte (main layout + state), +layout.ts
+│       └── lib/
+│           ├── components/ CodeEditor, FileTree, FindingCard, VerifyTab, KnowledgeTab …
+│           ├── highlighter.ts  shiki singleton (vitesse-dark theme)
+│           ├── api.ts     fetch wrappers (PUBLIC_API_URL)
+│           ├── types.ts   shared TypeScript types
+│           └── folder.ts  folder drag-and-drop utilities
 ├── .claude/               Claude Code configuration
 │   ├── commands/          vuln-add, vuln-verify, vuln-add-verify-with-claude
 │   ├── hooks/typecheck.sh   PostToolUse: lint after Write/Edit

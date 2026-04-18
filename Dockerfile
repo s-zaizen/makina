@@ -47,8 +47,8 @@ WORKDIR /app
 COPY --from=frontend-deps /app/node_modules ./node_modules
 COPY frontend/ ./
 
-ARG NEXT_PUBLIC_API_URL=http://localhost:7373
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ARG PUBLIC_API_URL=http://localhost:7373
+ENV PUBLIC_API_URL=$PUBLIC_API_URL
 
 RUN npm run build
 
@@ -57,12 +57,12 @@ FROM node:20-slim AS frontend
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=frontend-builder /app/.next/standalone ./
-COPY --from=frontend-builder /app/.next/static ./.next/static
-COPY --from=frontend-builder /app/public ./public
+COPY --from=frontend-builder /app/build ./build
+COPY --from=frontend-builder /app/node_modules ./node_modules
+COPY --from=frontend-builder /app/package.json ./
 
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["node", "build"]
 
 # ════════════════════════════════════════════════════════════════════════════
 # ml
