@@ -19,9 +19,11 @@ Label count is a maturity indicator, not a capability gate.
 │  - /api/scan                                        │
 │  - /api/feedback                                    │
 │  - /api/verify/queue  (GET / POST / DELETE)         │
-│  - /api/verify/done   (GET — verified history)      │
+│  - /api/knowledge     (GET / POST — verified cases) │
 │  - /api/stats                                       │
-│  SQLite  ~/.deus/feedback.db                        │
+│  SQLite  ~/.deus/feedback.db  (ML training data)    │
+│  SQLite  ~/.deus/verify.db    (pending queue)       │
+│  SQLite  ~/.deus/knowledge.db (verified cases)      │
 └──────────┬──────────────────────────────────────────┘
            │ HTTP (internal)
 ┌──────────▼──────────────────────────────────────────┐
@@ -43,7 +45,7 @@ For each scan request, three detectors run in parallel and are merged:
 2. **CodeBERT semantic** — cosine similarity against 11 CWE embeddings
 3. **taint engine** — tree-sitter BFS from sources to sinks, cross-function
 
-Results are deduplicated by CWE, then each finding is embedded with
+All three sources are merged and each finding is embedded with
 call-graph-augmented context (enclosing function + 1-hop callees) and
 stored in SQLite with the embedding vector.
 
@@ -54,7 +56,9 @@ Scan → findings stored with CodeBERT embedding vectors
   ↓
 Human reviews in Verify tab (TP / FP labels)
   ↓
-Verify Submit → /api/verify/queue DELETE
+Verify Submit → POST /api/knowledge {case_no, labels}
+  ↓
+Rust core: saves labels to feedback.db, moves case to knowledge.db
   ↓
 Rust core calls POST /train (fire-and-forget)
   ↓
@@ -85,7 +89,10 @@ Stages are **descriptive** — the model is always active and learning.
 
 ## Data Model
 
+Three SQLite databases under `~/.deus/`:
+
 ```sql
+-- feedback.db: ML training data (read by Python ML service)
 -- findings: one row per detected finding
 id TEXT PRIMARY KEY        -- UUID
 code_hash TEXT             -- SHA-256 of scanned code
@@ -98,15 +105,25 @@ label TEXT                 -- 'tp' | 'fp' (NULL until verified)
 labeled_at TEXT            -- ISO-8601
 created_at TEXT
 
--- verify_queue: human review queue
+-- verify.db: pending human review queue
+-- verify_queue: cases awaiting labeling
 case_no INTEGER PRIMARY KEY AUTOINCREMENT
-cve_id TEXT                -- optional CVE identifier (not shown in UI)
+cve_id TEXT                -- optional CVE identifier
 code TEXT
 language TEXT
 findings_json TEXT         -- JSON array of Finding objects
 submitted_at TEXT
-verified_at TEXT           -- set when Verify Submit is called
-status TEXT                -- 'pending' | 'done'
+
+-- knowledge.db: verified cases with labels
+-- knowledge: cases that have been labeled and submitted
+case_no INTEGER PRIMARY KEY
+cve_id TEXT
+code TEXT
+language TEXT
+findings_json TEXT         -- JSON array of Finding objects
+labels_json TEXT           -- JSON map of {finding_id: "tp"|"fp"}
+submitted_at TEXT
+verified_at TEXT
 ```
 
 ## Directory Layout

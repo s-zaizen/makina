@@ -1,14 +1,14 @@
 use axum::{extract::{Json, Path}, http::StatusCode, response::IntoResponse};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::feedback::store;
 
 use super::models::{
-    AddToQueueRequest, FeedbackRequest, FeedbackResponse, Finding, Language,
+    AddToQueueRequest, FeedbackRequest, FeedbackResponse, Finding, KnowledgeCase, Language,
     ManualFindingRequest, Severity, ScanRequest, ScanResponse, StatsResponse,
-    VerifyQueueCase,
+    SubmitKnowledgeRequest, VerifyQueueCase,
 };
 
 #[derive(serde::Deserialize, Default)]
@@ -214,24 +214,7 @@ pub async fn scan(
     );
 
     let mut raw_findings: Vec<RawFinding> = semgrep_raw;
-
-    // Track all CWEs seen so far (semgrep + ML) to avoid showing the same CWE twice
-    let mut seen_cwes: HashSet<String> = raw_findings
-        .iter()
-        .filter_map(|r| r.finding.cwe.clone())
-        .collect();
-
-    for r in ml_raw {
-        let already_covered = r.finding.cwe.as_deref().map_or(false, |c| seen_cwes.contains(c));
-        if !already_covered {
-            if let Some(cwe) = &r.finding.cwe {
-                seen_cwes.insert(cwe.clone());
-            }
-            raw_findings.push(r);
-        }
-    }
-
-    // Taint findings are interprocedural — they complement intra-function findings, add without CWE dedup
+    raw_findings.extend(ml_raw);
     raw_findings.extend(taint_raw);
 
     // Embed all findings with call-graph-augmented context
@@ -333,27 +316,58 @@ pub async fn stats() -> Result<impl IntoResponse, (StatusCode, String)> {
 
 // ── Verify queue ──────────────────────────────────────────────────────────────
 
-pub async fn get_verified() -> Result<impl IntoResponse, (StatusCode, String)> {
-    let items = store::get_done_items()
+pub async fn get_knowledge() -> Result<impl IntoResponse, (StatusCode, String)> {
+    let items = store::get_knowledge_items()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let cases: Vec<VerifyQueueCase> = items
+    let cases: Vec<KnowledgeCase> = items
         .into_iter()
         .map(|item| {
             let findings: Vec<Finding> =
                 serde_json::from_str(&item.findings_json).unwrap_or_default();
-            VerifyQueueCase {
+            let labels: HashMap<String, String> =
+                serde_json::from_str(&item.labels_json).unwrap_or_default();
+            KnowledgeCase {
                 case_no: item.case_no,
                 cve_id: item.cve_id,
                 code: item.code,
                 language: item.language,
                 findings,
+                labels,
                 submitted_at: item.submitted_at,
+                verified_at: item.verified_at,
             }
         })
         .collect();
 
     Ok(Json(cases))
+}
+
+pub async fn submit_knowledge(
+    Json(req): Json<SubmitKnowledgeRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    for (id, label) in &req.labels {
+        store::update_label(id, &label.to_string())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    let labels_map: HashMap<String, String> = req
+        .labels
+        .iter()
+        .map(|(k, v)| (k.clone(), v.to_string()))
+        .collect();
+    let labels_json = serde_json::to_string(&labels_map)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    store::submit_to_knowledge(req.case_no, &labels_json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Retrain on every Verify Submit — this is the primary learning trigger.
+    let client = build_client().unwrap_or_default();
+    let url = format!("{}/train", ml_url());
+    let _ = client.post(&url).json(&serde_json::json!({})).send().await;
+
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 
 pub async fn get_queue() -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -402,7 +416,7 @@ pub async fn add_to_queue(
 pub async fn remove_from_queue(
     Path(case_no): Path<i64>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    store::mark_queue_done(case_no)
+    store::submit_to_knowledge(case_no, "{}")
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Retrain on every Verify Submit — this is the primary learning trigger.

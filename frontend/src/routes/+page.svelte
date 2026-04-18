@@ -14,11 +14,11 @@
 		getStats,
 		getVerifyQueue,
 		addToVerifyQueue,
-		removeFromVerifyQueue,
-		getVerifiedHistory
+		getKnowledgeHistory,
+		submitToKnowledge
 	} from '$lib/api';
 	import { readFolder, flatFiles } from '$lib/folder';
-	import type { Finding, Language, Label, Stats, Severity, VerifyCase, VerifiedEntry, FileNode } from '$lib/types';
+	import type { Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode } from '$lib/types';
 
 	type Tab = 'scan' | 'verify' | 'knowledge';
 
@@ -199,7 +199,7 @@ char* getBuffer(int size) {
 	let focusedFindingId = $state<string | null>(null);
 
 	let verifyCases = $state<VerifyCase[]>([]);
-	let knowledgeHistory = $state<VerifiedEntry[]>([]);
+	let knowledgeHistory = $state<KnowledgeCase[]>([]);
 
 	let folderRoot = $state<FileNode | null>(null);
 	let selectedFile = $state<FileNode | null>(null);
@@ -217,10 +217,8 @@ char* getBuffer(int size) {
 		getVerifyQueue()
 			.then((q) => (verifyCases = q))
 			.catch(() => {});
-		getVerifiedHistory()
-			.then((cases) => {
-				knowledgeHistory = cases.map(toVerifiedEntry);
-			})
+		getKnowledgeHistory()
+			.then((cases) => (knowledgeHistory = cases))
 			.catch(() => {});
 	});
 
@@ -230,34 +228,6 @@ char* getBuffer(int size) {
 		try {
 			stats = await getStats();
 		} catch { /* backend not running */ }
-	}
-
-	const SEV_ORDER: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
-
-	function toVerifiedEntry(vc: VerifyCase): VerifiedEntry {
-		const maxSeverity = vc.findings.reduce<Severity | null>((acc, f) => {
-			if (!acc || SEV_ORDER[f.severity] > SEV_ORDER[acc]) return f.severity;
-			return acc;
-		}, null);
-		const cwes = Array.from(new Set(vc.findings.map((f) => f.cwe).filter((c): c is string => c !== null)));
-		const ruleIds = Array.from(new Set(vc.findings.map((f) => f.rule_id)));
-		const avgConfidence =
-			vc.findings.length > 0
-				? vc.findings.reduce((s, f) => s + f.confidence, 0) / vc.findings.length
-				: 0;
-		return {
-			caseNo: vc.caseNo,
-			cveId: vc.cveId,
-			verifiedAt: vc.submittedAt,
-			language: vc.language,
-			findingCount: vc.findings.length,
-			tpCount: 0,
-			fpCount: 0,
-			maxSeverity,
-			cwes,
-			ruleIds,
-			avgConfidence
-		};
 	}
 
 	// ── Handlers ─────────────────────────────────────────────────────────────────
@@ -316,41 +286,20 @@ char* getBuffer(int size) {
 		const vc = verifyCases.find((c) => c.caseNo === caseNo);
 		if (!vc) return;
 
-		const labeledEntries = Object.entries(vc.labels);
-		await Promise.all(labeledEntries.map(([id, lbl]) => submitFeedback(id, lbl)));
+		await submitToKnowledge(caseNo, vc.labels);
 
-		const tpCount = labeledEntries.filter(([, l]) => l === 'tp').length;
-		const fpCount = labeledEntries.filter(([, l]) => l === 'fp').length;
-
-		const maxSeverity = vc.findings.reduce<Severity | null>((acc, f) => {
-			if (!acc || SEV_ORDER[f.severity] > SEV_ORDER[acc]) return f.severity;
-			return acc;
-		}, null);
-		const cwes = Array.from(
-			new Set(vc.findings.map((f) => f.cwe).filter((c): c is string => c !== null))
-		);
-		const ruleIds = Array.from(new Set(vc.findings.map((f) => f.rule_id)));
-		const avgConfidence =
-			vc.findings.length > 0
-				? vc.findings.reduce((s, f) => s + f.confidence, 0) / vc.findings.length
-				: 0;
-
-		const entry: VerifiedEntry = {
+		const knowledgeCase: KnowledgeCase = {
 			caseNo: vc.caseNo,
 			cveId: vc.cveId,
-			verifiedAt: new Date().toISOString(),
+			code: vc.code,
 			language: vc.language,
-			findingCount: vc.findings.length,
-			tpCount,
-			fpCount,
-			maxSeverity,
-			cwes,
-			ruleIds,
-			avgConfidence
+			findings: vc.findings,
+			labels: { ...vc.labels },
+			submittedAt: vc.submittedAt,
+			verifiedAt: new Date().toISOString()
 		};
-		knowledgeHistory = [entry, ...knowledgeHistory];
+		knowledgeHistory = [knowledgeCase, ...knowledgeHistory];
 		verifyCases = verifyCases.filter((c) => c.caseNo !== caseNo);
-		try { await removeFromVerifyQueue(caseNo); } catch { /* non-critical */ }
 		await refreshStats();
 	}
 

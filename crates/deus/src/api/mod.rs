@@ -18,7 +18,7 @@ pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {
         .route("/api/stats", get(handlers::stats))
         .route("/api/verify/queue", get(handlers::get_queue).post(handlers::add_to_queue))
         .route("/api/verify/queue/:case_no", delete(handlers::remove_from_queue))
-        .route("/api/verify/done", get(handlers::get_verified))
+        .route("/api/knowledge", get(handlers::get_knowledge).post(handlers::submit_knowledge))
         .layer(cors);
 
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;

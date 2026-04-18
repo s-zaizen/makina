@@ -22,18 +22,20 @@ Label and submit a pending case in the deus verify queue.
    - Assess whether it is a true positive (TP) or false positive (FP) based on the code and the rule/CWE reported.
    - Default to **TP** for obvious vulnerability patterns; FP only when the scanner clearly misfired.
 
-3. **Submit labels** — POST feedback for each finding:
+3. **Submit labels and case in one call** — POST to knowledge (triggers GBDT retrain):
    ```
-   POST http://localhost:7373/api/feedback
-   {"finding_id": "<id>", "label": "tp" | "fp"}
+   POST http://localhost:7373/api/knowledge
+   {
+     "case_no": {case_id},
+     "labels": {
+       "<finding_id_1>": "tp",
+       "<finding_id_2>": "fp",
+       ...
+     }
+   }
    ```
 
-4. **Submit the case** — DELETE the case from the queue (triggers GBDT retrain):
-   ```
-   DELETE http://localhost:7373/api/verify/queue/{case_id}
-   ```
-
-5. **Report** — output:
+4. **Report** — output:
    - `case_no` submitted
    - per-finding label summary (`N tp, M fp`)
    - confirmation that retrain was triggered

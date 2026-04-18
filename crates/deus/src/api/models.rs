@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub struct ScanRequest {
     pub code: String,
     pub language: Language,
+    #[allow(dead_code)]
     pub filename: Option<String>,
 }
 
@@ -121,4 +123,22 @@ pub struct AddToQueueRequest {
     pub code: String,
     pub language: String,
     pub findings: Vec<Finding>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnowledgeCase {
+    pub case_no: i64,
+    pub cve_id: Option<String>,
+    pub code: String,
+    pub language: String,
+    pub findings: Vec<Finding>,
+    pub labels: HashMap<String, String>,
+    pub submitted_at: String,
+    pub verified_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitKnowledgeRequest {
+    pub case_no: i64,
+    pub labels: HashMap<String, Label>,
 }

@@ -8,13 +8,17 @@
 		language,
 		onlabel,
 		onfocus,
-		focused = false
+		focused = false,
+		readonly = false,
+		existingLabel = null
 	}: {
 		finding: Finding;
 		language: Language;
-		onlabel: (id: string, label: Label) => Promise<void>;
+		onlabel?: (id: string, label: Label) => Promise<void>;
 		onfocus?: () => void;
 		focused?: boolean;
+		readonly?: boolean;
+		existingLabel?: Label | null;
 	} = $props();
 
 	const severityStyles: Record<Severity, string> = {
@@ -36,7 +40,8 @@
 		low: 'bg-blue-400'
 	};
 
-	let labeled = $state<Label | null>(null);
+	let interactiveLabel = $state<Label | null>(null);
+	const labeled = $derived<Label | null>(readonly ? (existingLabel ?? null) : interactiveLabel);
 	let loading = $state(false);
 	let highlightedHtml = $state('');
 
@@ -69,10 +74,11 @@
 
 	async function handleLabel(label: Label, e: MouseEvent) {
 		e.stopPropagation();
+		if (!onlabel) return;
 		loading = true;
 		try {
 			await onlabel(finding.id, label);
-			labeled = label;
+			interactiveLabel = label;
 		} finally {
 			loading = false;
 		}
@@ -114,7 +120,7 @@
 						: 'bg-purple-950 text-purple-400 border-purple-800'
 			}`}
 		>
-			{finding.source}
+			{finding.source.toUpperCase()}
 		</span>
 		{#if finding.is_uncertain}
 			<span class="text-xs px-1.5 py-0.5 rounded bg-yellow-900 text-yellow-400 border border-yellow-700">
@@ -156,50 +162,65 @@
 		</div>
 	</div>
 
-	<!-- TP / FP buttons -->
-	<div class="flex gap-2 mt-1">
-		<button
-			onclick={(e) => handleLabel('tp', e)}
-			disabled={loading || labeled !== null}
-			class={[
-				'flex-1 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
-				labeled === 'tp'
-					? 'bg-green-700 border-green-600 text-white'
-					: labeled === 'fp'
-						? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
-						: 'bg-green-900/40 border-green-700 text-green-400 hover:bg-green-900/70 cursor-pointer'
-			].join(' ')}
-		>
-			{#if labeled === 'tp'}
-				<svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-					<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-				</svg>
-			{:else}
-				<span>&#10003;</span>
-			{/if}
-			True Positive
-		</button>
+	<!-- TP / FP buttons or readonly label badge -->
+	{#if readonly}
+		{#if labeled}
+			<div class="flex items-center gap-2 mt-1">
+				<span class={[
+					'text-xs font-semibold px-3 py-1 rounded border',
+					labeled === 'tp'
+						? 'bg-green-700 border-green-600 text-white'
+						: 'bg-red-700 border-red-600 text-white'
+				].join(' ')}>
+					{labeled === 'tp' ? '✓ True Positive' : '✗ False Positive'}
+				</span>
+			</div>
+		{/if}
+	{:else}
+		<div class="flex gap-2 mt-1">
+			<button
+				onclick={(e) => handleLabel('tp', e)}
+				disabled={loading || labeled !== null}
+				class={[
+					'flex-1 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
+					labeled === 'tp'
+						? 'bg-green-700 border-green-600 text-white'
+						: labeled === 'fp'
+							? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
+							: 'bg-green-900/40 border-green-700 text-green-400 hover:bg-green-900/70 cursor-pointer'
+				].join(' ')}
+			>
+				{#if labeled === 'tp'}
+					<svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+					</svg>
+				{:else}
+					<span>&#10003;</span>
+				{/if}
+				True Positive
+			</button>
 
-		<button
-			onclick={(e) => handleLabel('fp', e)}
-			disabled={loading || labeled !== null}
-			class={[
-				'flex-1 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
-				labeled === 'fp'
-					? 'bg-red-700 border-red-600 text-white'
-					: labeled === 'tp'
-						? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
-						: 'bg-red-900/40 border-red-700 text-red-400 hover:bg-red-900/70 cursor-pointer'
-			].join(' ')}
-		>
-			{#if labeled === 'fp'}
-				<svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-					<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-				</svg>
-			{:else}
-				<span>&#10007;</span>
-			{/if}
-			False Positive
-		</button>
-	</div>
+			<button
+				onclick={(e) => handleLabel('fp', e)}
+				disabled={loading || labeled !== null}
+				class={[
+					'flex-1 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
+					labeled === 'fp'
+						? 'bg-red-700 border-red-600 text-white'
+						: labeled === 'tp'
+							? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
+							: 'bg-red-900/40 border-red-700 text-red-400 hover:bg-red-900/70 cursor-pointer'
+				].join(' ')}
+			>
+				{#if labeled === 'fp'}
+					<svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+					</svg>
+				{:else}
+					<span>&#10007;</span>
+				{/if}
+				False Positive
+			</button>
+		</div>
+	{/if}
 </div>

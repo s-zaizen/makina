@@ -11,7 +11,8 @@
 		findings = [],
 		focusedLine = null,
 		onFolderDrop,
-		filename
+		filename,
+		readonly = false
 	}: {
 		value: string;
 		onchange: (v: string) => void;
@@ -20,6 +21,7 @@
 		focusedLine?: number | null;
 		onFolderDrop?: (item: DataTransferItem) => void;
 		filename?: string;
+		readonly?: boolean;
 	} = $props();
 
 	const LANG_MAP: Record<Language, string> = {
@@ -108,63 +110,69 @@
 		});
 	}
 
-	onMount(async () => {
-		// Set up Monaco worker BEFORE importing the module
-		(window as Window & { MonacoEnvironment?: unknown }).MonacoEnvironment = {
-			getWorker: () => new EditorWorker()
-		};
+	onMount(() => {
+		let disposeEditor: (() => void) | null = null;
 
-		const monaco = await import('monaco-editor');
-		monacoRef = monaco;
+		void (async () => {
+			// Set up Monaco worker BEFORE importing the module
+			(window as Window & { MonacoEnvironment?: unknown }).MonacoEnvironment = {
+				getWorker: () => new EditorWorker()
+			};
 
-		setupTheme(monaco);
-		monaco.editor.setTheme('deus-dark');
+			const monaco = await import('monaco-editor');
+			monacoRef = monaco;
 
-		const instance = monaco.editor.create(containerEl, {
-			value,
-			language: LANG_MAP[language],
-			theme: 'deus-dark',
-			fontSize: 13,
-			fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
-			fontLigatures: true,
-			lineHeight: 1.75,
-			letterSpacing: 0.3,
-			lineNumbers: 'on',
-			glyphMargin: true,
-			minimap: { enabled: true, scale: 1, renderCharacters: false, maxColumn: 80 },
-			scrollBeyondLastLine: false,
-			wordWrap: 'on',
-			padding: { top: 14, bottom: 14 },
-			renderLineHighlight: 'all',
-			cursorBlinking: 'smooth',
-			cursorSmoothCaretAnimation: 'on',
-			smoothScrolling: true,
-			overviewRulerBorder: false,
-			hideCursorInOverviewRuler: false,
-			folding: true,
-			foldingHighlight: false,
-			scrollbar: { verticalScrollbarSize: 5, horizontalScrollbarSize: 5, useShadows: false },
-			bracketPairColorization: { enabled: true },
-			guides: { bracketPairs: 'active', indentation: true },
-			suggest: { showWords: false, showSnippets: false },
-			quickSuggestions: false,
-			parameterHints: { enabled: false },
-			codeLens: false,
-			contextmenu: false,
-			links: false,
-			renderWhitespace: 'none',
-			occurrencesHighlight: 'off',
-			selectionHighlight: true
-		});
+			setupTheme(monaco);
+			monaco.editor.setTheme('deus-dark');
 
-		instance.onDidChangeModelContent(() => {
-			if (!updating) onchange(instance.getValue());
-		});
+			const instance = monaco.editor.create(containerEl, {
+				value,
+				language: LANG_MAP[language],
+				theme: 'deus-dark',
+				readOnly: readonly,
+				fontSize: 13,
+				fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
+				fontLigatures: true,
+				lineHeight: 1.75,
+				letterSpacing: 0.3,
+				lineNumbers: 'on',
+				glyphMargin: true,
+				minimap: { enabled: true, scale: 1, renderCharacters: false, maxColumn: 80 },
+				scrollBeyondLastLine: false,
+				wordWrap: 'on',
+				padding: { top: 14, bottom: 14 },
+				renderLineHighlight: 'all',
+				cursorBlinking: 'smooth',
+				cursorSmoothCaretAnimation: 'on',
+				smoothScrolling: true,
+				overviewRulerBorder: false,
+				hideCursorInOverviewRuler: false,
+				folding: true,
+				foldingHighlight: false,
+				scrollbar: { verticalScrollbarSize: 5, horizontalScrollbarSize: 5, useShadows: false },
+				bracketPairColorization: { enabled: true },
+				guides: { bracketPairs: 'active', indentation: true },
+				suggest: { showWords: false, showSnippets: false },
+				quickSuggestions: false,
+				parameterHints: { enabled: false },
+				codeLens: false,
+				contextmenu: false,
+				links: false,
+				renderWhitespace: 'none',
+				occurrencesHighlight: 'off',
+				selectionHighlight: true
+			});
 
-		editor = instance;
+			instance.onDidChangeModelContent(() => {
+				if (!updating) onchange(instance.getValue());
+			});
+
+			editor = instance;
+			disposeEditor = () => instance.dispose();
+		})();
 
 		return () => {
-			instance.dispose();
+			disposeEditor?.();
 		};
 	});
 

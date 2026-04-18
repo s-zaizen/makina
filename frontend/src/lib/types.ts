@@ -61,16 +61,13 @@ export interface FileNode {
   children?: FileNode[];
 }
 
-export interface VerifiedEntry {
+export interface KnowledgeCase {
   caseNo: number;
   cveId?: string | null;
-  verifiedAt: string;
+  code: string;
   language: Language;
-  findingCount: number;
-  tpCount: number;
-  fpCount: number;
-  maxSeverity: Severity | null;
-  cwes: string[];
-  ruleIds: string[];
-  avgConfidence: number;
+  findings: Finding[];
+  labels: Record<string, string>;
+  submittedAt: string;
+  verifiedAt: string;
 }

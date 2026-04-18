@@ -1,7 +1,9 @@
 <script lang="ts">
-	import type { Stats, VerifiedEntry } from '$lib/types';
+	import type { Stats, KnowledgeCase, Label, Language } from '$lib/types';
+	import CodeEditor from '$lib/components/CodeEditor.svelte';
+	import FindingCard from '$lib/components/FindingCard.svelte';
 
-	let { stats, history }: { stats: Stats | null; history: VerifiedEntry[] } = $props();
+	let { stats, history }: { stats: Stats | null; history: KnowledgeCase[] } = $props();
 
 	const STAGES = [
 		{ key: 'bootstrapping', label: 'Bootstrapping', min: 0 },
@@ -64,102 +66,151 @@
 			? Math.min(100, Math.round(((total - curMin) / (nextStage.min - curMin)) * 100))
 			: 100
 	);
+
+	// Center panel selection state
+	let selectedCaseNo = $state<number | null>(null);
+	let focusedFindingId = $state<string | null>(null);
+
+	const selectedCase = $derived(history.find((c) => c.caseNo === selectedCaseNo) ?? null);
+	const focusedLine = $derived(
+		selectedCase?.findings.find((f) => f.id === focusedFindingId)?.line_start ?? null
+	);
+
+	function selectCase(caseNo: number) {
+		selectedCaseNo = caseNo;
+		focusedFindingId = null;
+	}
+
+	function getSeverityCounts(kc: KnowledgeCase) {
+		const ruleIds = Array.from(new Set(kc.findings.map((f) => f.rule_id)));
+		const cwes = Array.from(
+			new Set(kc.findings.map((f) => f.cwe).filter((c): c is string => c !== null))
+		);
+		const tpCount = Object.values(kc.labels).filter((l) => l === 'tp').length;
+		const fpCount = Object.values(kc.labels).filter((l) => l === 'fp').length;
+		const maxSev = kc.findings.reduce<string | null>((acc, f) => {
+			const order: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+			if (!acc || (order[f.severity] ?? 0) > (order[acc] ?? 0)) return f.severity;
+			return acc;
+		}, null);
+		return { ruleIds, cwes, tpCount, fpCount, maxSev };
+	}
 </script>
 
 <div class="flex flex-1 min-h-0">
-	<!-- Left: Case History -->
-	<div class="flex-1 min-w-0 overflow-y-auto px-5 py-4 border-r border-gray-800">
-		<div class="max-w-2xl">
-			<div class="flex items-center gap-2 mb-4">
-				<h2 class="text-xs font-semibold text-gray-500 uppercase tracking-widest">
-					Verified Cases
-				</h2>
-				{#if history.length > 0}
-					<span class="text-[10px] bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
-						{history.length}
-					</span>
-				{/if}
-			</div>
-
-			{#if history.length === 0}
-				<div class="flex flex-col items-center justify-center py-20 gap-3">
-					<div class="w-12 h-12 rounded-full bg-gray-800/60 border border-gray-700 flex items-center justify-center">
-						<svg class="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-								d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-						</svg>
-					</div>
-					<p class="text-sm text-gray-600">No verified cases yet.</p>
-					<p class="text-xs text-gray-700">Submit cases from the Verify tab to build the knowledge base.</p>
-				</div>
-			{:else}
-				<div class="space-y-3">
-					{#each history as entry (entry.caseNo)}
-						<article class="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden hover:border-gray-700 transition-colors">
-							<!-- Header bar -->
-							<div class="flex items-center gap-2.5 px-4 py-2.5 border-b border-gray-800/60 bg-gray-900/80">
-								<span class="font-mono text-sm font-bold text-indigo-400 shrink-0">
-									#{String(entry.caseNo).padStart(4, '0')}
-								</span>
-								<span class={`text-[10px] px-1.5 py-0.5 rounded border font-mono shrink-0 ${langColor[entry.language] ?? 'text-gray-400 bg-gray-800 border-gray-600'}`}>
-									{entry.language}
-								</span>
-								{#if entry.maxSeverity}
-									<span class={`ml-auto text-[10px] font-bold uppercase px-2 py-0.5 rounded border shrink-0 ${sevColor[entry.maxSeverity]}`}>
-										{entry.maxSeverity}
-									</span>
-								{/if}
-							</div>
-
-							<!-- Findings list -->
-							{#if entry.findingCount > 0}
-								<div class="px-4 pt-3 pb-2 space-y-2">
-									{#each entry.ruleIds.slice(0, 4) as rid, i}
-										<div class="flex items-start gap-2">
-											<div class={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${sevDot[entry.maxSeverity ?? 'low'] ?? 'bg-gray-600'}`}></div>
-											<div class="min-w-0">
-												<span class="font-mono text-xs text-gray-300 truncate block">{rid}</span>
-												{#if entry.cwes[i]}
-													<span class="text-[10px] text-gray-600 font-mono">{entry.cwes[i]}</span>
-												{/if}
-											</div>
-										</div>
-									{/each}
-									{#if entry.ruleIds.length > 4}
-										<p class="text-[10px] text-gray-700 pl-3.5">+{entry.ruleIds.length - 4} more</p>
-									{/if}
-								</div>
-							{:else}
-								<div class="px-4 py-2.5">
-									<span class="text-xs text-gray-700 italic">No findings detected</span>
-								</div>
-							{/if}
-
-							<!-- Footer -->
-							<div class="flex items-center gap-3 px-4 py-2 border-t border-gray-800/40 bg-gray-950/30">
-								<span class="text-[10px] text-gray-600 tabular-nums">
-									{entry.findingCount} finding{entry.findingCount !== 1 ? 's' : ''}
-								</span>
-								{#if entry.tpCount > 0}
-									<span class="text-[10px] text-emerald-600 font-medium">TP:{entry.tpCount}</span>
-								{/if}
-								{#if entry.fpCount > 0}
-									<span class="text-[10px] text-red-700 font-medium">FP:{entry.fpCount}</span>
-								{/if}
-								{#if entry.findingCount > 0}
-									<span class="text-[10px] text-gray-700 tabular-nums">
-										conf:{Math.round(entry.avgConfidence * 100)}%
-									</span>
-								{/if}
-								<span class="ml-auto text-[10px] text-gray-700 tabular-nums shrink-0">
-									{formatDate(entry.verifiedAt)}
-								</span>
-							</div>
-						</article>
-					{/each}
-				</div>
+	<!-- Left: Case list -->
+	<div class="w-60 xl:w-72 shrink-0 flex flex-col border-r border-gray-800 bg-gray-950">
+		<div class="flex items-center gap-2 px-4 py-3 border-b border-gray-800/60 shrink-0">
+			<h2 class="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
+				Verified Cases
+			</h2>
+			{#if history.length > 0}
+				<span class="text-[10px] bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
+					{history.length}
+				</span>
 			{/if}
 		</div>
+
+		{#if history.length === 0}
+			<div class="flex flex-col items-center justify-center flex-1 gap-3 px-4">
+				<div class="w-10 h-10 rounded-full bg-gray-800/60 border border-gray-700 flex items-center justify-center">
+					<svg class="w-4 h-4 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+							d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+					</svg>
+				</div>
+				<p class="text-xs text-gray-600 text-center">No verified cases yet.</p>
+			</div>
+		{:else}
+			<div class="flex-1 overflow-y-auto py-2">
+				{#each history as kc (kc.caseNo)}
+					{@const { maxSev, tpCount, fpCount } = getSeverityCounts(kc)}
+					<button
+						onclick={() => selectCase(kc.caseNo)}
+						class={[
+							'w-full text-left px-3 py-2.5 flex flex-col gap-1 transition-colors',
+							selectedCaseNo === kc.caseNo
+								? 'bg-indigo-600/20 border-r-2 border-indigo-500'
+								: 'hover:bg-gray-800/50 border-r-2 border-transparent'
+						].join(' ')}
+					>
+						<div class="flex items-center gap-2">
+							<span class="font-mono text-xs font-bold text-indigo-400 shrink-0">
+								#{String(kc.caseNo).padStart(4, '0')}
+							</span>
+							<span class={`text-[10px] px-1 py-0.5 rounded border font-mono shrink-0 ${langColor[kc.language] ?? 'text-gray-400 bg-gray-800 border-gray-600'}`}>
+								{kc.language.toUpperCase()}
+							</span>
+							{#if maxSev}
+								<span class={`ml-auto text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border shrink-0 ${sevColor[maxSev]}`}>
+									{maxSev}
+								</span>
+							{/if}
+						</div>
+						<div class="flex items-center gap-2 text-[10px] text-gray-600">
+							<span>{kc.findings.length} findings</span>
+							{#if tpCount > 0}<span class="text-emerald-600">TP:{tpCount}</span>{/if}
+							{#if fpCount > 0}<span class="text-red-700">FP:{fpCount}</span>{/if}
+							<span class="ml-auto truncate">{formatDate(kc.verifiedAt)}</span>
+						</div>
+					</button>
+				{/each}
+			</div>
+		{/if}
+	</div>
+
+	<!-- Center: Code viewer + findings -->
+	<div class="flex-1 min-w-0 flex flex-col min-h-0 border-r border-gray-800/60">
+		{#if selectedCase}
+			<div class="flex flex-1 min-h-0">
+				<!-- Code editor (readonly) -->
+				<div class="flex-1 min-w-0 flex flex-col min-h-0">
+					<CodeEditor
+						value={selectedCase.code}
+						onchange={() => {}}
+						language={selectedCase.language as Language}
+						findings={selectedCase.findings}
+						focusedLine={focusedLine}
+						readonly={true}
+						filename={`case-${String(selectedCase.caseNo).padStart(4, '0')}.${selectedCase.language}`}
+					/>
+				</div>
+
+				<!-- Finding cards -->
+				<div class="w-80 xl:w-96 shrink-0 overflow-y-auto p-3 flex flex-col gap-2 bg-gray-950 border-l border-gray-800/60">
+					<div class="flex items-center gap-2 mb-1">
+						<span class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">
+							Findings
+						</span>
+						<span class="text-[10px] bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
+							{selectedCase.findings.length}
+						</span>
+					</div>
+					{#each selectedCase.findings as f (f.id)}
+						<FindingCard
+							finding={f}
+							language={selectedCase.language as Language}
+							onlabel={async () => {}}
+							onfocus={() => (focusedFindingId = f.id)}
+							focused={f.id === focusedFindingId}
+							readonly={true}
+							existingLabel={(selectedCase.labels[f.id] as Label | undefined) ?? null}
+						/>
+					{/each}
+				</div>
+			</div>
+		{:else}
+			<div class="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
+				<div class="w-12 h-12 rounded-full bg-gray-800/60 border border-gray-700 flex items-center justify-center">
+					<svg class="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+							d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+					</svg>
+				</div>
+				<p class="text-sm text-gray-600">Select a case to view code</p>
+				<p class="text-xs text-gray-700">Click any case in the left panel</p>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Right: Learning Status -->

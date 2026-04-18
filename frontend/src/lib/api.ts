@@ -1,4 +1,4 @@
-import type { Finding, ScanResponse, Stats, Language, Label, VerifyCase } from './types';
+import type { Finding, ScanResponse, Stats, Language, Label, VerifyCase, KnowledgeCase } from './types';
 
 import { PUBLIC_API_URL } from '$env/static/public';
 const BASE = PUBLIC_API_URL || 'http://localhost:7373';
@@ -104,14 +104,47 @@ export async function addToVerifyQueue(
 	return mapCase(item);
 }
 
-export async function removeFromVerifyQueue(caseNo: number): Promise<void> {
-	const res = await fetch(`${BASE}/api/verify/queue/${caseNo}`, { method: 'DELETE' });
-	if (!res.ok) throw new Error(`Queue remove failed: ${res.status}`);
+// ── Knowledge ─────────────────────────────────────────────────────────────────
+
+interface BackendKnowledgeCase {
+	case_no: number;
+	cve_id: string | null;
+	code: string;
+	language: string;
+	findings: Finding[];
+	labels: Record<string, string>;
+	submitted_at: string;
+	verified_at: string;
 }
 
-export async function getVerifiedHistory(): Promise<VerifyCase[]> {
-	const res = await fetch(`${BASE}/api/verify/done`);
-	if (!res.ok) throw new Error(`Verified history failed: ${res.status}`);
-	const items: BackendVerifyCase[] = await res.json();
-	return items.map(mapCase);
+function mapKnowledgeCase(b: BackendKnowledgeCase): KnowledgeCase {
+	return {
+		caseNo: b.case_no,
+		cveId: b.cve_id,
+		code: b.code,
+		language: b.language as Language,
+		findings: b.findings,
+		labels: b.labels,
+		submittedAt: b.submitted_at,
+		verifiedAt: b.verified_at
+	};
+}
+
+export async function getKnowledgeHistory(): Promise<KnowledgeCase[]> {
+	const res = await fetch(`${BASE}/api/knowledge`);
+	if (!res.ok) throw new Error(`Knowledge fetch failed: ${res.status}`);
+	const items: BackendKnowledgeCase[] = await res.json();
+	return items.map(mapKnowledgeCase);
+}
+
+export async function submitToKnowledge(
+	caseNo: number,
+	labels: Record<string, Label>
+): Promise<void> {
+	const res = await fetch(`${BASE}/api/knowledge`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ case_no: caseNo, labels })
+	});
+	if (!res.ok) throw new Error(`Knowledge submit failed: ${res.status}`);
 }
