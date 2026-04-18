@@ -25,6 +25,26 @@ docker compose logs -f
 
 Services: frontend `:3000`, backend `:7373`, ML `:8080`.
 
+## Slash Commands (`.claude/commands/`)
+
+| Command | Purpose |
+|---|---|
+| `/vuln-add {code}` | Scan a code snippet and add it to the verify queue |
+| `/vuln-verify {case_id}` | Label findings and submit a queued case (triggers retrain) |
+| `/vuln-add-verify-with-claude` | Research a CVE, extract PoC code, then run vuln-add + vuln-verify end-to-end |
+
+## Hooks & Checks
+
+Hooks fire automatically — do not skip or work around them:
+
+- **After Write/Edit** (PostToolUse) — `.claude/hooks/typecheck.sh`: `cargo clippy`, `ruff check`, or `npm run check` depending on file type. Exit 2 triggers self-correction.
+- **Before push** (PreToolUse on Bash) — `.claude/hooks/prepush-gate.sh`: intercepts `git push` and runs the full suite (clippy + `cargo test` + ruff + npm check). Exit 2 blocks the push.
+
+To activate the git-side pre-push hook for manual pushes (one-time per clone):
+```bash
+git config core.hooksPath .claude/hooks
+```
+
 ## Commit Rules
 
 Follow Conventional Commits — **one-line message, no body**:

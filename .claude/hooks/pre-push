@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# git pre-push hook: full lint + test suite before any push.
+# Activate via: git config core.hooksPath .claude/hooks
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+echo "pre-push: cargo clippy" >&2
+cargo clippy --quiet -- -D warnings || exit 1
+
+echo "pre-push: cargo test" >&2
+cargo test --quiet || exit 1
+
+echo "pre-push: ruff check" >&2
+ruff check ml/ || exit 1
+
+echo "pre-push: npm run check" >&2
+(cd frontend && npm run check --silent) || exit 1

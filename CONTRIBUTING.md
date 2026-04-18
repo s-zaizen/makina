@@ -5,6 +5,9 @@
 **Prerequisites:** Rust (stable), Python 3.11+, Node.js 20+, Docker
 
 ```bash
+# Activate git hooks (one-time per clone)
+git config core.hooksPath .claude/hooks
+
 # Start all services
 docker compose up -d
 
@@ -24,6 +27,11 @@ crates/deus/   Rust core — axum API, SQLite, scan orchestration
 ml/            Python ML service — CodeBERT, GBDT, semgrep, taint
 frontend/      Next.js UI — Scan / Verify / Knowledge tabs
 docs/          Architecture and design documentation
+.claude/       Claude Code configuration
+  commands/    Slash commands — vuln-add, vuln-verify, vuln-add-verify-with-claude
+  hooks/       typecheck.sh (PostToolUse), pre-push (git hook), prepush-gate.sh (PreToolUse)
+  rules/       Path-scoped lint/style rules (backend, ml, frontend)
+  settings.json  Hook configuration
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a full system overview.
@@ -57,6 +65,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 | `backend`    | Rust crate                 |
 | `ml`         | Python ML service          |
 | `frontend`   | Next.js app                |
+| `.claude`    | Claude Code slash commands |
 | `api`        | HTTP API contract changes  |
 | `verify`     | Verify queue / labeling    |
 | `scan`       | Scan pipeline              |
@@ -85,22 +94,13 @@ Standalone docs-only commits exist only for documentation that is truly independ
 - Link to relevant issue if one exists
 - All services should still build: `docker compose up -d` must succeed
 
-## Code Style
-
-- **Rust:** `cargo fmt` + `cargo clippy` (no warnings)
-- **Python:** `ruff format` + `ruff check`
-- **TypeScript:** `tsc --noEmit` must pass; follow existing code style
-
 ## Testing
 
-```bash
-# Rust unit tests
-cargo test
+End-to-end: `docker compose up -d`, then use `/vuln-add` in Claude Code to queue a case.
 
-# End-to-end: start stack, then run the CVE import
-docker compose up -d
-python3 import_cves.py
-```
+Automatic checks run at two points:
 
-There are no mandatory automated tests yet.
-New features should include at minimum a manual test note in the PR description.
+- **Edit/Write** — `.claude/hooks/typecheck.sh` (PostToolUse): `cargo clippy`, `ruff check`, `npm run check`
+- **Push** — `.claude/hooks/pre-push` (git hook + PreToolUse gate): clippy + `cargo test` + ruff + npm check
+
+Language-specific style rules are in `.claude/rules/`.

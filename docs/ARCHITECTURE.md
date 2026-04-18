@@ -130,6 +130,13 @@ deus/
 │       └── components/    CodeEditor, FileTree, VerifyTab, KnowledgeTab …
 ├── import_cves.py         Import trickest/cve MDs into verify queue
 ├── import_100_cves.py     Batch import 100 CVE cases + auto-label
+├── .claude/               Claude Code configuration
+│   ├── commands/          vuln-add, vuln-verify, vuln-add-verify-with-claude
+│   ├── hooks/typecheck.sh   PostToolUse: lint after Write/Edit
+│   ├── hooks/pre-push       git pre-push hook: clippy + test + ruff + npm check
+│   ├── hooks/prepush-gate.sh PreToolUse (Bash): intercepts git push for Claude
+│   ├── rules/               Path-scoped rules (backend.md, ml.md, frontend.md)
+│   └── settings.json        Hook bindings (PreToolUse + PostToolUse)
 ├── CLAUDE.md              AI assistant instructions for this repo
 ├── CONTRIBUTING.md        Commit conventions, dev setup, code style
 └── docs/ARCHITECTURE.md   this file
