@@ -38,6 +38,10 @@ const SEV_BG: Record<string, string> = {
 	low: 'rgba(96,165,250,0.10)'
 };
 
+export async function preloadHighlighter(): Promise<void> {
+	await getInstance();
+}
+
 export async function highlightSnippet(
 	code: string,
 	lang: string,

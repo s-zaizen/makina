@@ -17,6 +17,7 @@
 		getKnowledgeHistory,
 		submitToKnowledge
 	} from '$lib/api';
+	import { preloadHighlighter } from '$lib/highlighter';
 	import { readFolder, flatFiles } from '$lib/folder';
 	import type { Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode } from '$lib/types';
 
@@ -213,6 +214,7 @@ char* getBuffer(int size) {
 	// ── Init ─────────────────────────────────────────────────────────────────────
 
 	onMount(() => {
+		void preloadHighlighter();
 		refreshStats();
 		getVerifyQueue()
 			.then((q) => (verifyCases = q))

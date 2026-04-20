@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { untrack } from 'svelte';
 	import { highlightSnippet } from '$lib/highlighter';
 	import type { Label, VerifyCase } from '$lib/types';
 
@@ -46,28 +46,28 @@
 	let codeCache = $state<Record<string, string>>({});
 
 	async function highlightAllCases(cs: typeof cases) {
+		const promises: Promise<void>[] = [];
 		for (const vc of cs) {
 			for (const f of vc.findings) {
 				if (f.code_snippet && !codeCache[f.id]) {
-					try {
-						codeCache[f.id] = await highlightSnippet(
-							f.code_snippet,
-							vc.language,
-							f.line_start,
-							f.line_end,
-							f.severity
-						);
-					} catch {
-						codeCache[f.id] = '';
-					}
+					codeCache[f.id] = ''; // sentinel: in-progress
+					const { id, code_snippet, line_start, line_end, severity } = f;
+					const lang = vc.language;
+					promises.push(
+						highlightSnippet(code_snippet, lang, line_start, line_end, severity)
+							.then((html) => { codeCache[id] = html; })
+							.catch(() => { /* keep sentinel, falls back to plain <pre> */ })
+					);
 				}
 			}
 		}
+		await Promise.all(promises);
 	}
 
-	onMount(() => { highlightAllCases(cases); });
-
-	$effect(() => { highlightAllCases(cases); });
+	$effect(() => {
+		const cs = cases; // track cases changes
+		untrack(() => { void highlightAllCases(cs); });
+	});
 
 	function isExpanded(caseNo: number) {
 		return expandedCases[caseNo] !== false;
