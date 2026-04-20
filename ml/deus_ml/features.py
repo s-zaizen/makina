@@ -10,7 +10,6 @@ import json
 import sys
 import base64
 import numpy as np
-from pathlib import Path
 
 
 def extract_ast_features(code: str, language: str) -> np.ndarray:

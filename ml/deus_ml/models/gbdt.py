@@ -7,7 +7,6 @@ Invoked via: python -m deus_ml.models.gbdt train <feedback.db> <output_model.jso
 import json
 import sys
 import sqlite3
-from pathlib import Path
 import numpy as np
 
 try:
@@ -16,7 +15,6 @@ except ImportError:
     print("xgboost not installed. Run: pip install xgboost", file=sys.stderr)
     sys.exit(1)
 
-from deus_ml.features import extract_ast_features
 
 
 REPLAY_RATIO = 0.30  # 30% reservoir sample from original training data
