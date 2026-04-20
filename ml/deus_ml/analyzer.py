@@ -32,6 +32,7 @@ from . import embedder
 logger = logging.getLogger("deus_ml.analyzer")
 
 DB_PATH = Path(os.environ.get("DEUS_DB", "/root/.deus/feedback.db"))
+MODEL_PATH = Path(os.environ.get("DEUS_MODEL", "/root/.deus/model.json"))
 
 # ── CWE metadata + hardcoded-prototype fallback ─────────────────────────────
 
@@ -217,6 +218,14 @@ THRESHOLD_HARDCODED = 0.80
 # Retained for reference / future use when we have line-level CVEfixes
 # embeddings. The kNN path currently biases every C function to sim≈0.99.
 THRESHOLD_LABELED = 0.96
+# Hybrid detection gate:
+#   - A window is ALWAYS emitted if a known dangerous sink (per-CWE regex)
+#     matches inside it — this is the high-precision signal we trust most.
+#   - The similarity path is deliberately strict: CodeBERT max-sim alone
+#     flooded Java files with CWE-94 FPs, so we require both very high
+#     similarity to a curated prototype AND the GBDT to agree strongly.
+GBDT_GATE_THRESHOLD = 0.70
+CWE_CLASSIFY_THRESHOLD = 0.95
 MIN_LINES_BETWEEN_SAME_CWE = 15
 REFINE_CONTEXT = 1
 REFINE_SPAN = 2
@@ -225,6 +234,8 @@ MAX_LABELED_PER_CWE = 200
 _index_lock = threading.Lock()
 _pattern_index: "list[dict] | None" = None
 _index_source: str = "none"  # "labeled" | "hardcoded" | "none"
+_gbdt_model = None
+_gbdt_lock = threading.Lock()
 
 
 def _build_hardcoded_index() -> list:
@@ -323,10 +334,48 @@ def reset_index() -> None:
     with _index_lock:
         _pattern_index = None
         _index_source = "none"
+    reset_gbdt()
 
 
 def index_source() -> str:
     return _index_source
+
+
+def _load_gbdt():
+    """Lazy-load the GBDT model used to gate detections. Returns None if
+    the model hasn't been trained yet."""
+    global _gbdt_model
+    with _gbdt_lock:
+        if _gbdt_model is not None:
+            return _gbdt_model
+        if not MODEL_PATH.exists():
+            return None
+        try:
+            import xgboost as xgb
+            m = xgb.XGBClassifier()
+            m.load_model(str(MODEL_PATH))
+            _gbdt_model = m
+            logger.info("GBDT loaded for analyzer gating")
+            return m
+        except Exception as e:
+            logger.warning("failed to load GBDT: %s", e)
+            return None
+
+
+def reset_gbdt() -> None:
+    global _gbdt_model
+    with _gbdt_lock:
+        _gbdt_model = None
+
+
+def _get_cwe_index() -> "list[dict] | None":
+    """Index used for CWE classification of windows. We stick with the
+    hardcoded curated prototypes (~10 CWEs) rather than the labeled
+    CVEfixes index: labeled has 40+ CWE buckets with whole-function
+    embeddings, and any C-ish function finds a high-similarity nearest
+    bucket regardless of actual vulnerability — producing CWE-347/79/etc
+    FPs across unrelated code."""
+    return _get_index()
 
 
 # ── Language detection + chunking ───────────────────────────────────────────
@@ -408,18 +457,148 @@ def _refine_range(
 
 # ── Public entry point ──────────────────────────────────────────────────────
 
-def analyze(code: str, language: Optional[str] = None) -> dict:
-    lang = _detect_language(code, language)
+def _classify_cwe(
+    unit_vec: np.ndarray, index: "list[dict] | None"
+) -> "tuple[dict | None, float]":
+    """Among the CWE clusters in `index`, pick the one whose pattern set is
+    most similar to `unit_vec`. Returns (entry, similarity)."""
+    if not index:
+        return None, 0.0
+    best_entry, best_sim = None, 0.0
+    for entry in index:
+        sims = entry["pattern_vecs"] @ unit_vec
+        sim = float(sims.max())
+        if sim > best_sim:
+            best_entry, best_sim = entry, sim
+    return best_entry, best_sim
 
-    if not embedder.is_ready():
-        return {"status": embedder.status(), "language_detected": lang, "findings": []}
 
+def _any_sink_hit(lines: list[str], win_start: int, win_end: int) -> Optional[tuple[str, int]]:
+    """Return (cwe, line_no) of the first sink regex hit in the window,
+    across every CWE we track — or None."""
+    for cwe in SINK_REGEX:
+        line_no = _find_sink_line(cwe, lines, win_start, win_end)
+        if line_no is not None:
+            return cwe, line_no
+    return None
+
+
+def _analyze_gbdt_first(
+    code: str, lang: str, gbdt, cwe_index: list[dict]
+) -> dict:
+    """Hybrid detection:
+      • a window is emitted if any CWE sink regex matches inside it
+        (ground truth — GBDT not consulted);
+      • otherwise the window must pass CWE_CLASSIFY_THRESHOLD on similarity
+        AND GBDT_GATE_THRESHOLD on the trained model."""
+    lines = code.splitlines()
+    if not lines:
+        return {"status": "ready", "language_detected": lang, "findings": [], "mode": "gbdt-first"}
+
+    line_vecs = _embed_lines(lines)
+
+    windows: list[tuple[int, int, str]] = []
+    chunks_list: list[str] = []
+    for line_start, line_end, chunk in _chunks(lines):
+        if len(chunk.strip()) < 30:
+            continue
+        windows.append((line_start, line_end, chunk))
+        chunks_list.append(chunk)
+
+    if not chunks_list:
+        return {"status": "ready", "language_detected": lang, "findings": [], "mode": "gbdt-first"}
+
+    embs = embedder.embed_batch(chunks_list)
+    if embs is None or len(embs) == 0:
+        return {"status": "ready", "language_detected": lang, "findings": [], "mode": "gbdt-first"}
+    embs = np.asarray(embs, dtype=np.float32)
+
+    try:
+        probs = gbdt.predict_proba(embs)[:, 1]
+    except Exception as e:
+        logger.warning("GBDT predict failed, falling back: %s", e)
+        return _analyze_legacy(code, lang)
+
+    findings = []
+    last_reported: dict[str, int] = {}
+
+    for (line_start, line_end, _chunk), emb, prob in zip(windows, embs, probs):
+        prob = float(prob)
+        norm = float(np.linalg.norm(emb))
+        if norm == 0:
+            continue
+        unit_vec = emb / norm
+
+        sink_hit = _any_sink_hit(lines, line_start, line_end)
+        gate_reason: str
+
+        if sink_hit is not None:
+            cwe, _sink_line = sink_hit
+            best_entry = next(
+                (e for e in cwe_index if e["cwe"] == cwe),
+                VULN_PATTERNS.get(cwe) and {
+                    "cwe": cwe,
+                    "name": VULN_PATTERNS[cwe]["name"],
+                    "severity": VULN_PATTERNS[cwe]["severity"],
+                    # No pattern_vecs needed — sink regex drives the refine.
+                    "pattern_vecs": np.zeros((1, 768), dtype=np.float32),
+                },
+            )
+            if best_entry is None:
+                continue
+            cwe_sim = 1.0  # sink match is ground truth
+            gate_reason = "sink"
+        else:
+            best_entry, cwe_sim = _classify_cwe(unit_vec, cwe_index)
+            if best_entry is None or cwe_sim < CWE_CLASSIFY_THRESHOLD:
+                continue
+            if prob < GBDT_GATE_THRESHOLD:
+                continue
+            cwe = best_entry["cwe"]
+            gate_reason = "sim+gbdt"
+
+        if line_start - last_reported.get(cwe, -999) < MIN_LINES_BETWEEN_SAME_CWE:
+            continue
+
+        refined_start, refined_end, _peak, method = _refine_range(
+            line_vecs, best_entry["pattern_vecs"],
+            line_start, line_end, cwe, lines,
+        )
+
+        last_reported[cwe] = refined_start
+        snippet_lines = lines[refined_start - 1 : refined_end]
+        findings.append({
+            "rule_id": f"ML-{cwe.replace('-', '')}",
+            "message": (
+                f"{best_entry.get('name', cwe)} "
+                f"(gate={gate_reason}, gbdt={prob:.2f}, cwe_sim={cwe_sim:.2f}, via {method})"
+            ),
+            "severity": best_entry.get("severity", "medium"),
+            "line_start": refined_start,
+            "line_end": refined_end,
+            "code_snippet": "\n".join(snippet_lines)[:400],
+            "confidence": round(prob if gate_reason != "sink" else max(prob, 0.75), 3),
+            "cwe": cwe,
+            "refined_by": method,
+            "gate": gate_reason,
+        })
+
+    return {
+        "status": "ready",
+        "language_detected": lang,
+        "findings": findings,
+        "mode": "hybrid-gbdt-first",
+    }
+
+
+def _analyze_legacy(code: str, lang: str) -> dict:
+    """Similarity-first detection — used as a fallback when the GBDT model
+    is not yet trained. This was the previous default behaviour."""
     index = _get_index()
     if not index:
         return {"status": "loading", "language_detected": lang, "findings": []}
 
     threshold = THRESHOLD_HARDCODED
-
     lines = code.splitlines()
     line_vecs = _embed_lines(lines) if lines else None
     findings = []
@@ -436,13 +615,7 @@ def analyze(code: str, language: Optional[str] = None) -> dict:
             continue
         vec = vec / norm
 
-        best_sim, best_entry = 0.0, None
-        for entry in index:
-            sims = entry["pattern_vecs"] @ vec
-            sim = float(sims.max())
-            if sim > best_sim:
-                best_sim, best_entry = sim, entry
-
+        best_entry, best_sim = _classify_cwe(vec, index)
         if best_entry is None or best_sim < threshold:
             continue
 
@@ -454,7 +627,6 @@ def analyze(code: str, language: Optional[str] = None) -> dict:
             line_vecs, best_entry["pattern_vecs"],
             line_start, line_end, cwe, lines,
         )
-
         last_reported[cwe] = refined_start
         snippet_lines = lines[refined_start - 1 : refined_end]
         findings.append({
@@ -473,5 +645,23 @@ def analyze(code: str, language: Optional[str] = None) -> dict:
         "status": "ready",
         "language_detected": lang,
         "findings": findings,
-        "index_source": _index_source,
+        "mode": "similarity-first",
     }
+
+
+def analyze(code: str, language: Optional[str] = None) -> dict:
+    lang = _detect_language(code, language)
+
+    if not embedder.is_ready():
+        return {"status": embedder.status(), "language_detected": lang, "findings": []}
+
+    gbdt = _load_gbdt()
+    if gbdt is None:
+        # No trained model yet — fall back to hardcoded-prototype similarity.
+        return _analyze_legacy(code, lang)
+
+    cwe_index = _get_cwe_index()
+    if not cwe_index:
+        return {"status": "loading", "language_detected": lang, "findings": []}
+
+    return _analyze_gbdt_first(code, lang, gbdt, cwe_index)

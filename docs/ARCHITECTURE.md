@@ -44,7 +44,7 @@ Label count is a maturity indicator, not a capability gate.
 For each scan request, three detectors run in parallel and are merged:
 
 1. **semgrep** — community rules + custom taint rules (YAML)
-2. **CodeBERT semantic** — cosine similarity against 11 CWE prototype embeddings (see `analyzer.py: VULN_PATTERNS`)
+2. **CodeBERT semantic** — see *"ML analysis gate"* below
 3. **taint engine** — tree-sitter BFS from sources to sinks, cross-function
 
 After merge, each finding is embedded with call-graph-augmented context
@@ -59,6 +59,28 @@ finding.confidence = 0.5 × heuristic_score + 0.5 × gbdt_probability
 If the GBDT model isn't trained yet (`model.json` absent), the heuristic
 score is kept unchanged. This is how the accumulated labels actually
 influence scan output.
+
+### ML analysis gate (hybrid, GBDT-first)
+
+`/analyze` uses a hybrid gate so CodeBERT's noisy similarity alone cannot
+flood a scan with false positives. For each sliding window:
+
+1. **Sink regex (primary)** — the window is emitted immediately if any
+   per-CWE sink regex (`eval`, `system`, `pickle.loads`,
+   `r_core_call_str_at`, `Runtime.getRuntime().exec`, …) matches inside
+   it. Sinks are ground truth for this detector; the GBDT is *not*
+   consulted.
+2. **Similarity + GBDT (secondary)** — otherwise the window must satisfy
+   BOTH of:
+   - CWE prototype cosine similarity ≥ `CWE_CLASSIFY_THRESHOLD` (0.95)
+   - GBDT probability ≥ `GBDT_GATE_THRESHOLD` (0.70)
+3. **GBDT absent** — when `model.json` does not exist yet, the analyzer
+   falls back to pure similarity with the old 0.80 threshold.
+
+Empirically this cut gson's false-positive count from ~600 to ~7 while
+keeping recall on the radare2 `r_core_call_str_at` case-study. The
+`gate`, `refined_by`, and `mode` fields on each finding record which
+path was taken.
 
 ### Refining the `ML` source to exact lines
 
