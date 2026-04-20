@@ -39,6 +39,14 @@ struct EmbedBatchResponse {
     embeddings: Vec<Vec<f32>>,
 }
 
+#[derive(serde::Deserialize, Default)]
+struct PredictBatchResponse {
+    #[serde(default)]
+    confidences: Option<Vec<f32>>,
+    #[serde(default)]
+    model_ready: bool,
+}
+
 struct RawFinding {
     finding: Finding,
 }
@@ -201,6 +209,79 @@ async fn call_taint(client: &reqwest::Client, req_id: &str, code: &str, language
     findings
 }
 
+async fn call_predict_batch(
+    client: &reqwest::Client,
+    req_id: &str,
+    feature_vectors: Vec<Vec<f32>>,
+) -> Option<Vec<Option<f32>>> {
+    // Build a compact list of non-empty vectors and remember their original
+    // indices so we can stitch GBDT scores back to the right findings.
+    let mut compact: Vec<Vec<f32>> = Vec::with_capacity(feature_vectors.len());
+    let mut idx_map: Vec<usize> = Vec::with_capacity(feature_vectors.len());
+    for (i, v) in feature_vectors.iter().enumerate() {
+        if !v.is_empty() {
+            idx_map.push(i);
+            compact.push(v.clone());
+        }
+    }
+    if compact.is_empty() {
+        return None;
+    }
+
+    let url = format!("{}/predict_batch", ml_url());
+    let body = serde_json::json!({ "feature_vectors": compact });
+    let start = std::time::Instant::now();
+
+    let resp = match with_request_id(client.post(&url).json(&body), req_id).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "predict_batch call failed");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        warn!(status = resp.status().as_u16(), "predict_batch non-success");
+        return None;
+    }
+    let data: PredictBatchResponse = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "predict_batch decode failed");
+            return None;
+        }
+    };
+    info!(
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        model_ready = data.model_ready,
+        returned = data.confidences.as_ref().map(|v| v.len()).unwrap_or(0),
+        "predict_batch done"
+    );
+
+    let confs = data.confidences?;
+    if confs.len() != compact.len() {
+        warn!(got = confs.len(), expected = compact.len(), "predict_batch length mismatch");
+        return None;
+    }
+    let mut out = vec![None; feature_vectors.len()];
+    for (j, &i) in idx_map.iter().enumerate() {
+        out[i] = Some(confs[j]);
+    }
+    Some(out)
+}
+
+fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
+    // Embeddings are stored as raw LE float32 bytes (3072 = 768 × 4).
+    // Reject sizes that aren't a multiple of 4.
+    #[allow(clippy::manual_is_multiple_of)]
+    if bytes.is_empty() || bytes.len() % 4 != 0 {
+        return vec![];
+    }
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
 async fn call_embed_with_graph(
     client: &reqwest::Client,
     req_id: &str,
@@ -269,14 +350,41 @@ pub async fn scan(
     let line_starts: Vec<u32> = raw_findings.iter().map(|r| r.finding.line_start).collect();
     let embeddings = call_embed_with_graph(&client, &req_id.0, &req.code, &req.language, &line_starts).await;
 
+    // GBDT scoring: convert per-finding embedding bytes → f32 vectors, batch
+    // score via the ML service. `gbdt_scores[i]` is None when the embedding
+    // was missing or the model is not trained yet.
+    let float_vecs: Vec<Vec<f32>> = embeddings
+        .iter()
+        .map(|v| bytes_to_f32_vec(v))
+        .collect();
+    let gbdt_scores = call_predict_batch(&client, &req_id.0, float_vecs).await;
+
     let mut findings: Vec<Finding> = Vec::new();
-    for (i, r) in raw_findings.into_iter().enumerate() {
+    for (i, mut r) in raw_findings.into_iter().enumerate() {
         let emb = embeddings.get(i).filter(|v| !v.is_empty()).map(|v| v.as_slice());
+
+        // When GBDT is trained, blend its score into the finding's confidence:
+        //   final = 0.5 * heuristic + 0.5 * gbdt
+        // When GBDT is absent, keep the heuristic as-is.
+        if let Some(ref scores) = gbdt_scores {
+            if let Some(Some(gbdt)) = scores.get(i) {
+                let original = r.finding.confidence;
+                let blended = 0.5 * original + 0.5 * *gbdt;
+                r.finding.confidence = blended;
+                r.finding.is_uncertain = (0.40..=0.60).contains(&blended);
+            }
+        }
+
         let _ = store::save_finding(&r.finding.id, &code_hash, &r.finding.rule_id, lang_str, r.finding.line_start, r.finding.confidence, emb);
         findings.push(r.finding);
     }
 
-    info!(scan_id = %scan_id, findings = findings.len(), "scan done");
+    info!(
+        scan_id = %scan_id,
+        findings = findings.len(),
+        gbdt_applied = gbdt_scores.is_some(),
+        "scan done"
+    );
 
     Ok(Json(ScanResponse {
         scan_id,

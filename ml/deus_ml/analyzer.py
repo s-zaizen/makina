@@ -1,7 +1,39 @@
-"""Language-agnostic vulnerability analyzer using code embeddings."""
+"""Language-agnostic vulnerability analyzer using code embeddings.
+
+Detection layers (cheap → expensive):
+
+  1. Sink-pattern regex (per CWE): pinpoints the exact line of a known
+     dangerous call (eval, system, pickle.loads, …) regardless of
+     semantic similarity. Very fast, high precision when a known sink
+     is present.
+
+  2. kNN against labeled CVEfixes / user-verified TP embeddings stored
+     in `feedback.db`. Built once at startup, grouped by CWE. Scanned
+     code windows are compared to each CWE's cluster of real-world TP
+     examples, not to hardcoded Python exec/eval strings.
+
+  3. Hardcoded CWE prototypes (VULN_PATTERNS below). Used as a fallback
+     when the labeled index is empty or the embedder is not ready.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import re
+import sqlite3
+import threading
+from pathlib import Path
 from typing import Optional
+
 import numpy as np
+
 from . import embedder
+
+logger = logging.getLogger("deus_ml.analyzer")
+
+DB_PATH = Path(os.environ.get("DEUS_DB", "/root/.deus/feedback.db"))
+
+# ── CWE metadata + hardcoded-prototype fallback ─────────────────────────────
 
 VULN_PATTERNS: dict = {
     "CWE-89": {
@@ -119,24 +151,88 @@ VULN_PATTERNS: dict = {
     },
 }
 
-THRESHOLD = 0.80
+# ── Sink regex table (C) ────────────────────────────────────────────────────
+# Per-CWE regex of known dangerous call-sites. Matching a sink pinpoints the
+# exact line, which beats embedding similarity for precision.
+
+SINK_REGEX: dict[str, re.Pattern] = {
+    "CWE-94": re.compile(
+        r"\b(exec|eval|Function|compile|r_core_call_str_at|vm\.runInNewContext|"
+        r"setTimeout\s*\(\s*['\"]|new\s+Function)\s*\(",
+    ),
+    "CWE-78": re.compile(
+        r"\b(os\.system|subprocess\.(?:call|run|Popen|check_output)|os\.popen|"
+        r"child_process\.(?:exec|execSync|spawn)|Runtime\.getRuntime\(\)\.exec|"
+        r"exec\.Command|shell_exec|passthru|pcntl_exec|popen|execve|execvp)\s*\("
+        r"|shell\s*=\s*True",
+    ),
+    "CWE-89": re.compile(
+        r"\.(?:execute|executemany|query|prepare|raw)\s*\(|"
+        r"\b(?:executeQuery|executeUpdate)\s*\(",
+    ),
+    "CWE-22": re.compile(
+        r"\b(?:open|fopen|readFile|readFileSync|writeFile|writeFileSync|"
+        r"FileInputStream|FileReader|ifstream|ofstream|path\.join)\s*\(",
+    ),
+    "CWE-502": re.compile(
+        r"\b(?:pickle\.loads?|cPickle\.loads?|yaml\.load|Marshal\.load|"
+        r"ObjectInputStream|unserialize|jsonpickle\.decode)\s*\(",
+    ),
+    "CWE-327": re.compile(
+        r"\bhashlib\.(?:md5|sha1)\s*\(|\bDES\.(?:new|Cipher)|"
+        r"MessageDigest\.getInstance\s*\(\s*['\"](?:MD5|SHA-?1)['\"]",
+    ),
+    "CWE-918": re.compile(
+        r"\b(?:requests\.(?:get|post|put|delete)|urllib\.request\.urlopen|"
+        r"urlopen|fetch|http\.Get|HttpClient\.Get|axios\.(?:get|post))\s*\(",
+    ),
+    "CWE-79": re.compile(
+        r"\binnerHTML\s*=|document\.write\s*\(|dangerouslySetInnerHTML|"
+        r"\$\(\s*[^)]+\)\.html\s*\(",
+    ),
+    "CWE-611": re.compile(
+        r"\b(?:ET\.parse|lxml\.etree\.(?:parse|fromstring)|"
+        r"DocumentBuilderFactory|XMLReader)\s*\(",
+    ),
+}
+
+
+def _find_sink_line(cwe: str, lines: list[str], win_start: int, win_end: int) -> Optional[int]:
+    """Return 1-indexed line of the first regex sink match inside the window,
+    or None. window bounds are 1-indexed inclusive."""
+    pat = SINK_REGEX.get(cwe)
+    if pat is None:
+        return None
+    lo = max(0, win_start - 1)
+    hi = min(len(lines), win_end)
+    for i in range(lo, hi):
+        if pat.search(lines[i]):
+            return i + 1
+    return None
+
+
+# ── Prototype / labeled index ───────────────────────────────────────────────
+
+THRESHOLD_HARDCODED = 0.80
+# Retained for reference / future use when we have line-level CVEfixes
+# embeddings. The kNN path currently biases every C function to sim≈0.99.
+THRESHOLD_LABELED = 0.96
 MIN_LINES_BETWEEN_SAME_CWE = 15
-# After a window matches, re-score each line inside it and return a tight
-# range around the hottest line. This narrows "Lines 1-20" to ~5 lines
-# pointing at the actual sink.
-REFINE_CONTEXT = 1  # lines of context used per-line during refinement embedding
-REFINE_SPAN = 2     # lines to keep on either side of the peak line
+REFINE_CONTEXT = 1
+REFINE_SPAN = 2
+MAX_LABELED_PER_CWE = 200
 
+_index_lock = threading.Lock()
 _pattern_index: "list[dict] | None" = None
+_index_source: str = "none"  # "labeled" | "hardcoded" | "none"
 
 
-def _build_index() -> list:
+def _build_hardcoded_index() -> list:
     index = []
     for cwe, info in VULN_PATTERNS.items():
         vecs = embedder.embed_batch(info["patterns"])
         if vecs is None:
             continue
-        # Normalize each pattern vector individually (per-pattern matching)
         normed = []
         for v in vecs:
             n = np.linalg.norm(v)
@@ -144,26 +240,96 @@ def _build_index() -> list:
                 normed.append(v / n)
         if not normed:
             continue
-        index.append(
-            {
-                "cwe": cwe,
-                "name": info["name"],
-                "severity": info["severity"],
-                "pattern_vecs": np.array(normed),  # shape (N, 768)
-            }
-        )
+        index.append({
+            "cwe": cwe,
+            "name": info["name"],
+            "severity": info["severity"],
+            "pattern_vecs": np.asarray(normed, dtype=np.float32),
+        })
+    return index
+
+
+def _build_labeled_index() -> list:
+    """Load TP embeddings from feedback.db, group by rule_id (== CWE when
+    available). Returns [] if DB is missing or has no usable samples."""
+    if not DB_PATH.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        rows = conn.execute(
+            "SELECT rule_id, feature_vector FROM findings "
+            "WHERE label = 'tp' AND feature_vector IS NOT NULL AND rule_id LIKE 'CWE-%'"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        logger.warning("failed to load labeled index: %s", e)
+        return []
+
+    buckets: dict[str, list[np.ndarray]] = {}
+    for rule_id, fv_bytes in rows:
+        if not fv_bytes:
+            continue
+        fv = np.frombuffer(fv_bytes, dtype="<f4")
+        if fv.shape[0] != 768:
+            continue
+        n = np.linalg.norm(fv)
+        if n == 0:
+            continue
+        buckets.setdefault(rule_id, []).append(fv / n)
+
+    index = []
+    for cwe, vecs in buckets.items():
+        if len(vecs) < 2:  # need at least a couple to be meaningful
+            continue
+        if len(vecs) > MAX_LABELED_PER_CWE:
+            # Deterministic subsample to keep matrix size bounded
+            step = len(vecs) // MAX_LABELED_PER_CWE
+            vecs = vecs[::step][:MAX_LABELED_PER_CWE]
+        meta = VULN_PATTERNS.get(cwe, {})
+        index.append({
+            "cwe": cwe,
+            "name": meta.get("name", cwe),
+            "severity": meta.get("severity", "medium"),
+            "pattern_vecs": np.asarray(vecs, dtype=np.float32),
+        })
     return index
 
 
 def _get_index() -> "list[dict] | None":
-    global _pattern_index
-    if _pattern_index is not None:
+    """Primary pattern index for CWE detection. We deliberately use the
+    hardcoded, line-level prototypes here rather than the labeled kNN index:
+    CVEfixes stores whole-method embeddings, which makes any C function look
+    "similar" to any vulnerable C function, producing noisy sim≈0.99 matches
+    across unrelated CWEs. The labeled data is better used for GBDT scoring
+    (method-level TP vs FP), not for initial CWE categorisation."""
+    global _pattern_index, _index_source
+    with _index_lock:
+        if _pattern_index is not None:
+            return _pattern_index
+        if not embedder.is_ready():
+            return None
+        _pattern_index = _build_hardcoded_index()
+        _index_source = "hardcoded"
+        logger.info(
+            "pattern index built",
+            extra={"cwes": len(_pattern_index), "source": "hardcoded"},
+        )
         return _pattern_index
-    if not embedder.is_ready():
-        return None
-    _pattern_index = _build_index()
-    return _pattern_index
 
+
+def reset_index() -> None:
+    """Force rebuild next call to _get_index(). Hook for /train completion."""
+    global _pattern_index, _index_source
+    with _index_lock:
+        _pattern_index = None
+        _index_source = "none"
+
+
+def index_source() -> str:
+    return _index_source
+
+
+# ── Language detection + chunking ───────────────────────────────────────────
 
 def _detect_language(code: str, hint: Optional[str]) -> str:
     if hint and hint.lower() not in ("auto", "unknown", ""):
@@ -188,17 +354,7 @@ def _chunks(lines: list, window: int = 20, stride: int = 10):
         yield start + 1, end, "\n".join(lines[start:end])
 
 
-def _cosine(a: np.ndarray, b: np.ndarray) -> float:
-    na, nb = np.linalg.norm(a), np.linalg.norm(b)
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(a, b) / (na * nb))
-
-
 def _embed_lines(lines: list[str]) -> "np.ndarray | None":
-    """Embed each line (with ±REFINE_CONTEXT context) and return a normalized
-    (N, 768) matrix — one row per source line. Returns None if the embedder
-    fails or yields no vectors."""
     snippets = []
     for i in range(len(lines)):
         s = max(0, i - REFINE_CONTEXT)
@@ -218,23 +374,39 @@ def _refine_range(
     pattern_vecs: np.ndarray,
     window_start: int,
     window_end: int,
-) -> tuple[int, int, float]:
-    """Within [window_start, window_end], locate the line with the highest
-    similarity to the matched CWE patterns and return a REFINE_SPAN-wide
-    range centered on it (clipped to the window)."""
-    if line_vecs is None:
-        return window_start, window_end, 0.0
-    lo, hi = window_start - 1, min(window_end, len(line_vecs))
-    if lo >= hi:
-        return window_start, window_end, 0.0
-    window = line_vecs[lo:hi]
-    sims = (pattern_vecs @ window.T).max(axis=0)
-    peak_idx = int(sims.argmax())
-    peak = float(sims[peak_idx])
-    s = max(0, peak_idx - REFINE_SPAN)
-    e = min(len(sims) - 1, peak_idx + REFINE_SPAN)
-    return window_start + s, window_start + e, peak
+    cwe: str,
+    lines: list[str],
+) -> tuple[int, int, float, str]:
+    """Narrow a window-level match to a tight range. Returns
+    (start, end, peak_score, refinement_method).
 
+    Preference order:
+      1. Regex sink match inside the window → exact line ± REFINE_SPAN
+      2. Embedding peak line ± REFINE_SPAN
+      3. Whole window (last resort when neither signal is available)
+    """
+    sink_line = _find_sink_line(cwe, lines, window_start, window_end)
+    if sink_line is not None:
+        s = max(window_start, sink_line - REFINE_SPAN)
+        e = min(window_end, sink_line + REFINE_SPAN)
+        return s, e, 1.0, "sink_regex"
+
+    if line_vecs is not None:
+        lo = window_start - 1
+        hi = min(window_end, len(line_vecs))
+        if lo < hi:
+            window = line_vecs[lo:hi]
+            sims = (pattern_vecs @ window.T).max(axis=0)
+            peak_idx = int(sims.argmax())
+            peak = float(sims[peak_idx])
+            s = max(0, peak_idx - REFINE_SPAN)
+            e = min(len(sims) - 1, peak_idx + REFINE_SPAN)
+            return window_start + s, window_start + e, peak, "embedding_peak"
+
+    return window_start, window_end, 0.0, "window"
+
+
+# ── Public entry point ──────────────────────────────────────────────────────
 
 def analyze(code: str, language: Optional[str] = None) -> dict:
     lang = _detect_language(code, language)
@@ -246,13 +418,15 @@ def analyze(code: str, language: Optional[str] = None) -> dict:
     if not index:
         return {"status": "loading", "language_detected": lang, "findings": []}
 
+    threshold = THRESHOLD_HARDCODED
+
     lines = code.splitlines()
     line_vecs = _embed_lines(lines) if lines else None
     findings = []
     last_reported: dict[str, int] = {}
 
     for line_start, line_end, chunk in _chunks(lines):
-        if len(chunk.strip()) < 30:  # skip near-empty tail chunks
+        if len(chunk.strip()) < 30:
             continue
         vec = embedder.embed(chunk)
         if vec is None:
@@ -269,30 +443,35 @@ def analyze(code: str, language: Optional[str] = None) -> dict:
             if sim > best_sim:
                 best_sim, best_entry = sim, entry
 
-        if best_entry is None or best_sim < THRESHOLD:
+        if best_entry is None or best_sim < threshold:
             continue
 
         cwe = best_entry["cwe"]
         if line_start - last_reported.get(cwe, -999) < MIN_LINES_BETWEEN_SAME_CWE:
             continue
 
-        refined_start, refined_end, _peak = _refine_range(
-            line_vecs, best_entry["pattern_vecs"], line_start, line_end
+        refined_start, refined_end, _peak, method = _refine_range(
+            line_vecs, best_entry["pattern_vecs"],
+            line_start, line_end, cwe, lines,
         )
 
         last_reported[cwe] = refined_start
         snippet_lines = lines[refined_start - 1 : refined_end]
-        findings.append(
-            {
-                "rule_id": f"ML-{cwe.replace('-', '')}",
-                "message": f"{best_entry['name']} (semantic match, sim={best_sim:.2f})",
-                "severity": best_entry["severity"],
-                "line_start": refined_start,
-                "line_end": refined_end,
-                "code_snippet": "\n".join(snippet_lines)[:400],
-                "confidence": round(best_sim, 3),
-                "cwe": cwe,
-            }
-        )
+        findings.append({
+            "rule_id": f"ML-{cwe.replace('-', '')}",
+            "message": f"{best_entry['name']} (semantic match, sim={best_sim:.2f}, via {method})",
+            "severity": best_entry["severity"],
+            "line_start": refined_start,
+            "line_end": refined_end,
+            "code_snippet": "\n".join(snippet_lines)[:400],
+            "confidence": round(best_sim, 3),
+            "cwe": cwe,
+            "refined_by": method,
+        })
 
-    return {"status": "ready", "language_detected": lang, "findings": findings}
+    return {
+        "status": "ready",
+        "language_detected": lang,
+        "findings": findings,
+        "index_source": _index_source,
+    }

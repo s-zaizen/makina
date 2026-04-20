@@ -198,14 +198,22 @@ def train(req: TrainRequest):
         },
     )
 
+    # Fresh labels just landed — invalidate analyzer's kNN index so the next
+    # /analyze call rebuilds it from the updated feedback.db.
+    analyzer.reset_index()
+
     return {
         "ok": True,
         "samples": len(X),
         "model_path": str(MODEL_PATH),
     }
 
+EMBEDDING_DIM = 768
+
+
 class PredictRequest(BaseModel):
-    feature_vector: list[float]  # 50-element vector
+    feature_vector: list[float]  # 768-dim CodeBERT embedding
+
 
 @app.post("/predict")
 def predict(req: PredictRequest):
@@ -214,11 +222,43 @@ def predict(req: PredictRequest):
         return {"confidence": None, "stage": "rules-only"}
 
     fv = np.array(req.feature_vector, dtype=np.float32).reshape(1, -1)
-    if fv.shape[1] != 50:
-        raise HTTPException(status_code=422, detail="feature_vector must have 50 elements.")
+    if fv.shape[1] != EMBEDDING_DIM:
+        raise HTTPException(
+            status_code=422,
+            detail=f"feature_vector must have {EMBEDDING_DIM} elements (got {fv.shape[1]}).",
+        )
 
     prob = float(model.predict_proba(fv)[0][1])
     return {"confidence": prob, "label": "tp" if prob >= 0.5 else "fp"}
+
+
+class PredictBatchRequest(BaseModel):
+    feature_vectors: list[list[float]]  # N × 768
+
+
+@app.post("/predict_batch")
+def predict_batch(req: PredictBatchRequest):
+    """Score N embeddings at once. Returns `confidences: [...]` in request
+    order, or `confidences: null` if the model is not trained yet."""
+    if not req.feature_vectors:
+        return {"confidences": [], "model_ready": False}
+
+    model = _load_model()
+    if model is None:
+        return {"confidences": None, "model_ready": False}
+
+    arr = np.array(req.feature_vectors, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[1] != EMBEDDING_DIM:
+        raise HTTPException(
+            status_code=422,
+            detail=f"feature_vectors must be N×{EMBEDDING_DIM} (got shape {list(arr.shape)}).",
+        )
+
+    probs = model.predict_proba(arr)[:, 1]
+    return {
+        "confidences": [float(p) for p in probs],
+        "model_ready": True,
+    }
 
 class AnalyzeRequest(BaseModel):
     code: str

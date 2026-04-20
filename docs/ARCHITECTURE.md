@@ -33,8 +33,9 @@ Label count is a maturity indicator, not a capability gate.
 │  - /analyze   CodeBERT semantic similarity          │
 │  - /taint     interprocedural taint flow            │
 │  - /embed_with_graph  call-graph-augmented embeds   │
-│  - /train     GBDT retrain on all accumulated labels│
-│  - /predict   GBDT confidence score                 │
+│  - /train         GBDT retrain on all labels        │
+│  - /predict       GBDT confidence (768-dim embed)   │
+│  - /predict_batch GBDT confidence, N embeddings     │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -43,12 +44,36 @@ Label count is a maturity indicator, not a capability gate.
 For each scan request, three detectors run in parallel and are merged:
 
 1. **semgrep** — community rules + custom taint rules (YAML)
-2. **CodeBERT semantic** — cosine similarity against 11 CWE embeddings
+2. **CodeBERT semantic** — cosine similarity against 11 CWE prototype embeddings (see `analyzer.py: VULN_PATTERNS`)
 3. **taint engine** — tree-sitter BFS from sources to sinks, cross-function
 
-All three sources are merged and each finding is embedded with
-call-graph-augmented context (enclosing function + 1-hop callees) and
-stored in SQLite with the embedding vector.
+After merge, each finding is embedded with call-graph-augmented context
+(enclosing function + 1-hop callees) and stored in SQLite. The Rust core
+then calls `POST /predict_batch` with every finding's embedding to get a
+GBDT probability, and blends:
+
+```
+finding.confidence = 0.5 × heuristic_score + 0.5 × gbdt_probability
+```
+
+If the GBDT model isn't trained yet (`model.json` absent), the heuristic
+score is kept unchanged. This is how the accumulated labels actually
+influence scan output.
+
+### Refining the `ML` source to exact lines
+
+The CodeBERT analyzer uses a 20-line sliding window for detection, then
+narrows each window match to a tight range via (in order of preference):
+
+1. **Sink regex** — per-CWE regex of known dangerous calls (`eval`,
+   `system`, `pickle.loads`, `r_core_call_str_at`, …). If a sink matches
+   inside the window, the finding is pinned to that line ± 2.
+2. **Embedding peak** — otherwise, re-score each line within the window
+   against the matched CWE patterns and center the range on the highest-
+   similarity line.
+3. **Window fallback** — used only when neither signal is available.
+
+The `refined_by` field on each finding records which path was taken.
 
 ## Learning Loop
 
@@ -72,7 +97,20 @@ Next scan uses updated GBDT confidence scores
 
 The GBDT is retrained from scratch on the full dataset after every Submit.
 This is intentional: with small datasets full retraining is cheap (<1s)
-and avoids incremental drift.
+and avoids incremental drift. After each retrain the analyzer's in-memory
+pattern index is invalidated (`analyzer.reset_index()`) so the next scan
+picks up any newly added CWE categories.
+
+### Why the labeled index is not the primary matcher
+
+`analyzer.py` also knows how to build a kNN index of TP embeddings grouped
+by CWE from `feedback.db` (`_build_labeled_index`). It is intentionally
+**not** used as the primary pattern matcher today, because CVEfixes stores
+*whole-method* embeddings — any C function ends up sim≈0.99 against every
+other C function, collapsing CWE discrimination. The labeled corpus earns
+its keep through the GBDT (method-level TP/FP decision), not through
+max-similarity matching. Line-level labeled embeddings would make the
+kNN path viable; that is a future direction.
 
 ### Bulk import path
 
