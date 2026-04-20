@@ -1,4 +1,4 @@
-use axum::{extract::{Extension, Json, Path}, http::StatusCode, response::IntoResponse};
+use axum::{extract::{Extension, Json, Path, Query}, http::StatusCode, response::IntoResponse};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use tracing::{info, warn};
@@ -402,8 +402,15 @@ pub async fn get_knowledge() -> Result<impl IntoResponse, (StatusCode, String)> 
     Ok(Json(cases))
 }
 
+#[derive(serde::Deserialize, Default)]
+pub struct SkipTrainQuery {
+    #[serde(default)]
+    pub skip_train: bool,
+}
+
 pub async fn submit_knowledge(
     Extension(req_id): Extension<RequestId>,
+    Query(q): Query<SkipTrainQuery>,
     Json(req): Json<SubmitKnowledgeRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     for (id, label) in &req.labels {
@@ -422,9 +429,12 @@ pub async fn submit_knowledge(
     store::submit_to_knowledge(req.case_no, &labels_json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    info!(case_no = req.case_no, labels = req.labels.len(), "knowledge submitted, scheduling train");
-
-    spawn_train(&req_id.0);
+    if q.skip_train {
+        info!(case_no = req.case_no, labels = req.labels.len(), "knowledge submitted (train skipped)");
+    } else {
+        info!(case_no = req.case_no, labels = req.labels.len(), "knowledge submitted, scheduling train");
+        spawn_train(&req_id.0);
+    }
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -474,16 +484,39 @@ pub async fn add_to_queue(
 
 pub async fn remove_from_queue(
     Extension(req_id): Extension<RequestId>,
+    Query(q): Query<SkipTrainQuery>,
     Path(case_no): Path<i64>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     store::submit_to_knowledge(case_no, "{}")
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    info!(case_no, "queue item submitted, scheduling train");
-
-    spawn_train(&req_id.0);
+    if q.skip_train {
+        info!(case_no, "queue item submitted (train skipped)");
+    } else {
+        info!(case_no, "queue item submitted, scheduling train");
+        spawn_train(&req_id.0);
+    }
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+pub async fn retrain(
+    Extension(req_id): Extension<RequestId>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let client = build_client()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "http client".to_string()))?;
+    let url = format!("{}/train", ml_url());
+    info!("retrain requested");
+    let start = std::time::Instant::now();
+    let resp = with_request_id(client.post(&url).json(&serde_json::json!({})), &req_id.0)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::json!({}));
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    info!(status = status.as_u16(), elapsed_ms, "retrain completed");
+    Ok(Json(body))
 }
 
 fn spawn_train(req_id: &str) {

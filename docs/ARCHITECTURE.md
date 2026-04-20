@@ -19,7 +19,8 @@ Label count is a maturity indicator, not a capability gate.
 │  - /api/scan                                        │
 │  - /api/feedback                                    │
 │  - /api/verify/queue  (GET / POST / DELETE)         │
-│  - /api/knowledge     (GET / POST — verified cases) │
+│  - /api/knowledge     (GET / POST[?skip_train])     │
+│  - /api/retrain       (POST — proxy to ML /train)   │
 │  - /api/stats                                       │
 │  SQLite  ~/.deus/feedback.db  (ML training data)    │
 │  SQLite  ~/.deus/verify.db    (pending queue)       │
@@ -72,6 +73,17 @@ Next scan uses updated GBDT confidence scores
 The GBDT is retrained from scratch on the full dataset after every Submit.
 This is intentional: with small datasets full retraining is cheap (<1s)
 and avoids incremental drift.
+
+### Bulk import path
+
+`ml/scripts/bulk_import.py` seeds the model from curated datasets
+(CVEfixes SQLite dump, or Hugging Face datasets like BigVul). Each row
+becomes a `POST /api/findings/manual` (which embeds the snippet) → a
+one-finding verify queue case → a `POST /api/knowledge?skip_train=true`
+that labels and archives the case without triggering the per-submit
+retrain. After the batch completes, the script fires a single
+`POST /api/retrain` to bring the GBDT up to date. This avoids a
+retrain stampede when importing hundreds of samples.
 
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.
@@ -152,6 +164,7 @@ deus/
 │       ├── feedback/      store.rs (SQLite), mod.rs
 │       └── logging.rs     tracing JSON init + request_id middleware
 ├── ml/                    Python ML service (FastAPI)
+│   ├── scripts/           bulk_import.py (dataset → knowledge, no scan)
 │   └── deus_ml/
 │       ├── server.py      API endpoints + GBDT train/predict
 │       ├── analyzer.py    CodeBERT semantic analysis
