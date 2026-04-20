@@ -67,7 +67,38 @@
 			: 100
 	);
 
-	// Center panel selection state
+	// Filter state
+	let searchQuery = $state('');
+	let filterLang = $state<string | null>(null);
+	let filterLabel = $state<'tp' | 'fp' | null>(null);
+
+	const availableLangs = $derived([...new Set(history.map((c) => c.language))]);
+
+	const filteredHistory = $derived(
+		history.filter((kc) => {
+			if (filterLang && kc.language !== filterLang) return false;
+			if (filterLabel) {
+				const vals = Object.values(kc.labels);
+				if (!vals.includes(filterLabel)) return false;
+			}
+			if (searchQuery.trim()) {
+				const q = searchQuery.toLowerCase();
+				if (
+					!kc.cveId?.toLowerCase().includes(q) &&
+					!kc.findings.some(
+						(f) =>
+							f.rule_id.toLowerCase().includes(q) ||
+							(f.cwe?.toLowerCase().includes(q) ?? false) ||
+							f.message.toLowerCase().includes(q)
+					)
+				)
+					return false;
+			}
+			return true;
+		})
+	);
+
+	// Center panel selection — always derived from full history so viewer stays put while filtering
 	let selectedCaseNo = $state<number | null>(null);
 	let focusedFindingId = $state<string | null>(null);
 
@@ -100,14 +131,54 @@
 <div class="flex flex-1 min-h-0">
 	<!-- Left: Case list -->
 	<div class="w-60 xl:w-72 shrink-0 flex flex-col border-r border-gray-800 bg-gray-950">
-		<div class="flex items-center gap-2 px-4 py-3 border-b border-gray-800/60 shrink-0">
-			<h2 class="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
-				Verified Cases
-			</h2>
+		<!-- Header + search -->
+		<div class="shrink-0 border-b border-gray-800/60">
+			<div class="flex items-center gap-2 px-4 py-2.5">
+				<h2 class="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
+					Verified Cases
+				</h2>
+				{#if history.length > 0}
+					<span class="text-[10px] bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
+						{filteredHistory.length}{filteredHistory.length !== history.length ? `/${history.length}` : ''}
+					</span>
+				{/if}
+			</div>
+
 			{#if history.length > 0}
-				<span class="text-[10px] bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
-					{history.length}
-				</span>
+				<div class="px-3 pb-2">
+					<input
+						bind:value={searchQuery}
+						type="text"
+						placeholder="Search CVE, rule, CWE…"
+						class="w-full bg-gray-800/60 border border-gray-700 rounded-md px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-600/60 transition-colors"
+					/>
+				</div>
+				<div class="px-3 pb-2.5 flex flex-wrap gap-1">
+					{#each [['ALL', null], ['TP', 'tp'], ['FP', 'fp']] as [chipLabel, chipVal]}
+						<button
+							onclick={() => { filterLabel = chipVal as 'tp' | 'fp' | null; }}
+							class={[
+								'text-[10px] px-2 py-0.5 rounded border transition-colors',
+								filterLabel === chipVal
+									? chipVal === 'tp' ? 'bg-emerald-700 border-emerald-600 text-white' : chipVal === 'fp' ? 'bg-red-700 border-red-600 text-white' : 'bg-indigo-700 border-indigo-600 text-white'
+									: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300 cursor-pointer'
+							].join(' ')}
+						>{chipLabel}</button>
+					{/each}
+					{#if availableLangs.length > 1}
+						{#each availableLangs as lang}
+							<button
+								onclick={() => { filterLang = filterLang === lang ? null : lang; }}
+								class={[
+									'text-[10px] px-2 py-0.5 rounded border font-mono transition-colors',
+									filterLang === lang
+										? 'bg-indigo-700 border-indigo-600 text-white'
+										: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300 cursor-pointer'
+								].join(' ')}
+							>{lang.toUpperCase()}</button>
+						{/each}
+					{/if}
+				</div>
 			{/if}
 		</div>
 
@@ -121,9 +192,17 @@
 				</div>
 				<p class="text-xs text-gray-600 text-center">No verified cases yet.</p>
 			</div>
+		{:else if filteredHistory.length === 0}
+			<div class="flex flex-col items-center justify-center flex-1 gap-2 px-4">
+				<p class="text-xs text-gray-600 text-center">No cases match the current filter.</p>
+				<button
+					onclick={() => { searchQuery = ''; filterLang = null; filterLabel = null; }}
+					class="text-[10px] text-indigo-500 hover:text-indigo-400 transition-colors cursor-pointer"
+				>Clear filters</button>
+			</div>
 		{:else}
 			<div class="flex-1 overflow-y-auto py-2">
-				{#each history as kc (kc.caseNo)}
+				{#each filteredHistory as kc (kc.caseNo)}
 					{@const { maxSev, tpCount, fpCount } = getSeverityCounts(kc)}
 					<button
 						onclick={() => selectCase(kc.caseNo)}

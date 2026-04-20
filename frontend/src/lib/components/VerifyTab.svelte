@@ -38,6 +38,32 @@
 		return `${date} ${time}`;
 	}
 
+	// Filter state
+	let searchQuery = $state('');
+	let filterLang = $state<string | null>(null);
+
+	const availableLangs = $derived([...new Set(cases.map((c) => c.language))]);
+
+	const filteredCases = $derived(
+		cases.filter((vc) => {
+			if (filterLang && vc.language !== filterLang) return false;
+			if (searchQuery.trim()) {
+				const q = searchQuery.toLowerCase();
+				if (
+					!vc.cveId?.toLowerCase().includes(q) &&
+					!vc.findings.some(
+						(f) =>
+							f.rule_id.toLowerCase().includes(q) ||
+							(f.cwe?.toLowerCase().includes(q) ?? false) ||
+							f.message.toLowerCase().includes(q)
+					)
+				)
+					return false;
+			}
+			return true;
+		})
+	);
+
 	// Per-case expand state and submitting state
 	let expandedCases = $state<Record<number, boolean>>({});
 	let submittingCases = $state<Record<number, boolean>>({});
@@ -107,11 +133,56 @@
 {:else}
 	<div class="flex-1 overflow-y-auto px-6 py-5 bg-gray-950">
 		<div class="max-w-2xl mx-auto space-y-3">
-			<p class="text-xs text-gray-600 mb-2">
-				{cases.length} case{cases.length !== 1 ? 's' : ''} pending verification
+			<!-- Search + language filter -->
+			<div class="flex flex-col gap-2 mb-3">
+				<input
+					bind:value={searchQuery}
+					type="text"
+					placeholder="Search CVE, rule, CWE, message…"
+					class="w-full bg-gray-800/60 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-600/60 transition-colors"
+				/>
+				{#if availableLangs.length > 1}
+					<div class="flex flex-wrap gap-1">
+						{#each availableLangs as lang}
+							<button
+								onclick={() => { filterLang = filterLang === lang ? null : lang; }}
+								class={[
+									'text-[10px] px-2 py-0.5 rounded border font-mono transition-colors cursor-pointer',
+									filterLang === lang
+										? 'bg-indigo-700 border-indigo-600 text-white'
+										: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+								].join(' ')}
+							>{lang.toUpperCase()}</button>
+						{/each}
+						{#if filterLang}
+							<button
+								onclick={() => { filterLang = null; }}
+								class="text-[10px] px-2 py-0.5 rounded border bg-gray-800 border-gray-700 text-gray-600 hover:text-gray-400 transition-colors cursor-pointer"
+							>✕ clear</button>
+						{/if}
+					</div>
+				{/if}
+			</div>
+
+			<p class="text-xs text-gray-600">
+				{#if filteredCases.length !== cases.length}
+					{filteredCases.length} of {cases.length} case{cases.length !== 1 ? 's' : ''} shown
+				{:else}
+					{cases.length} case{cases.length !== 1 ? 's' : ''} pending verification
+				{/if}
 			</p>
 
-			{#each cases as vc (vc.caseNo)}
+			{#if filteredCases.length === 0}
+				<div class="flex flex-col items-center gap-2 py-8 text-center">
+					<p class="text-sm text-gray-600">No cases match the current filter.</p>
+					<button
+						onclick={() => { searchQuery = ''; filterLang = null; }}
+						class="text-xs text-indigo-500 hover:text-indigo-400 transition-colors cursor-pointer"
+					>Clear filters</button>
+				</div>
+			{/if}
+
+			{#each filteredCases as vc (vc.caseNo)}
 				{@const labeledCount = Object.keys(vc.labels).length}
 				{@const tpCount = Object.values(vc.labels).filter((l) => l === 'tp').length}
 				{@const fpCount = Object.values(vc.labels).filter((l) => l === 'fp').length}
