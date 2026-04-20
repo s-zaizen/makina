@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { highlightSnippet } from '$lib/highlighter';
 	import type { Label, VerifyCase } from '$lib/types';
 
@@ -64,43 +63,32 @@
 		})
 	);
 
-	// Per-case expand state and submitting state
+	// Per-case expand state and submitting state — collapsed by default
 	let expandedCases = $state<Record<number, boolean>>({});
 	let submittingCases = $state<Record<number, boolean>>({});
 
-	// Highlighted code cache: keyed by findingId
+	// Highlighted code cache: keyed by findingId. Populated lazily on expand.
 	let codeCache = $state<Record<string, string>>({});
 
-	async function highlightAllCases(cs: typeof cases) {
-		const promises: Promise<void>[] = [];
-		for (const vc of cs) {
-			for (const f of vc.findings) {
-				if (f.code_snippet && !codeCache[f.id]) {
-					codeCache[f.id] = ''; // sentinel: in-progress
-					const { id, code_snippet, line_start, line_end, severity } = f;
-					const lang = vc.language;
-					promises.push(
-						highlightSnippet(code_snippet, lang, line_start, line_end, severity)
-							.then((html) => { codeCache[id] = html; })
-							.catch(() => { /* keep sentinel, falls back to plain <pre> */ })
-					);
-				}
-			}
+	function highlightCase(vc: VerifyCase) {
+		for (const f of vc.findings) {
+			if (!f.code_snippet || codeCache[f.id] !== undefined) continue;
+			codeCache[f.id] = ''; // sentinel: in-progress
+			const { id, code_snippet, line_start, line_end, severity } = f;
+			highlightSnippet(code_snippet, vc.language, line_start, line_end, severity)
+				.then((html) => { codeCache[id] = html; })
+				.catch(() => { /* keep sentinel, falls back to plain <pre> */ });
 		}
-		await Promise.all(promises);
 	}
-
-	$effect(() => {
-		const cs = cases; // track cases changes
-		untrack(() => { void highlightAllCases(cs); });
-	});
 
 	function isExpanded(caseNo: number) {
-		return expandedCases[caseNo] !== false;
+		return expandedCases[caseNo] === true;
 	}
 
-	function toggleExpand(caseNo: number) {
-		expandedCases[caseNo] = !isExpanded(caseNo);
+	function toggleExpand(vc: VerifyCase) {
+		const next = !isExpanded(vc.caseNo);
+		expandedCases[vc.caseNo] = next;
+		if (next) highlightCase(vc);
 	}
 
 	async function handleSubmit(caseNo: number) {
@@ -192,7 +180,7 @@
 				<div class="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden">
 					<!-- Header -->
 					<button
-						onclick={() => toggleExpand(vc.caseNo)}
+						onclick={() => toggleExpand(vc)}
 						class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-gray-800/50 transition-colors text-left"
 					>
 						<span class="font-mono text-sm font-bold text-indigo-400 shrink-0">
