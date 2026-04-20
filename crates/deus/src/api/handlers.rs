@@ -362,10 +362,13 @@ pub async fn submit_knowledge(
     store::submit_to_knowledge(req.case_no, &labels_json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Retrain on every Verify Submit — this is the primary learning trigger.
-    let client = build_client().unwrap_or_default();
-    let url = format!("{}/train", ml_url());
-    let _ = client.post(&url).json(&serde_json::json!({})).send().await;
+    // Retrain on every Verify Submit — fire-and-forget so the response returns immediately.
+    if let Some(client) = build_client() {
+        let url = format!("{}/train", ml_url());
+        tokio::spawn(async move {
+            let _ = client.post(&url).json(&serde_json::json!({})).send().await;
+        });
+    }
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -419,10 +422,13 @@ pub async fn remove_from_queue(
     store::submit_to_knowledge(case_no, "{}")
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Retrain on every Verify Submit — this is the primary learning trigger.
-    let client = build_client().unwrap_or_default();
-    let url = format!("{}/train", ml_url());
-    let _ = client.post(&url).json(&serde_json::json!({})).send().await;
+    // Retrain on every Verify Submit — fire-and-forget so the response returns immediately.
+    if let Some(client) = build_client() {
+        let url = format!("{}/train", ml_url());
+        tokio::spawn(async move {
+            let _ = client.post(&url).json(&serde_json::json!({})).send().await;
+        });
+    }
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
