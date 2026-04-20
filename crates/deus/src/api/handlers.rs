@@ -1,9 +1,11 @@
-use axum::{extract::{Json, Path}, http::StatusCode, response::IntoResponse};
+use axum::{extract::{Extension, Json, Path}, http::StatusCode, response::IntoResponse};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::feedback::store;
+use crate::logging::RequestId;
 
 use super::models::{
     AddToQueueRequest, FeedbackRequest, FeedbackResponse, Finding, KnowledgeCase, Language,
@@ -95,77 +97,113 @@ fn ml_finding_to_raw(mf: MlFinding, source: &str) -> RawFinding {
     }
 }
 
-async fn call_semgrep(client: &reqwest::Client, code: &str, language: &Language) -> Vec<RawFinding> {
+fn with_request_id(rb: reqwest::RequestBuilder, req_id: &str) -> reqwest::RequestBuilder {
+    rb.header("x-request-id", req_id)
+}
+
+async fn call_semgrep(client: &reqwest::Client, req_id: &str, code: &str, language: &Language) -> Vec<RawFinding> {
     let url = format!("{}/semgrep", ml_url());
     let body = serde_json::json!({
         "code": code,
         "language": language_hint(language),
     });
+    let start = std::time::Instant::now();
 
-    let resp = match client.post(&url).json(&body).send().await {
+    let resp = match with_request_id(client.post(&url).json(&body), req_id).send().await {
         Ok(r) => r,
-        Err(_) => return vec![],
+        Err(e) => {
+            warn!(error = %e, "semgrep call failed");
+            return vec![];
+        }
     };
     if !resp.status().is_success() {
+        warn!(status = resp.status().as_u16(), "semgrep non-success");
         return vec![];
     }
     let ml: MlResponse = match resp.json().await {
         Ok(v) => v,
-        Err(_) => return vec![],
+        Err(e) => {
+            warn!(error = %e, "semgrep decode failed");
+            return vec![];
+        }
     };
 
-    ml.findings.into_iter().map(|mf| ml_finding_to_raw(mf, "semgrep")).collect()
+    let findings: Vec<RawFinding> = ml.findings.into_iter().map(|mf| ml_finding_to_raw(mf, "semgrep")).collect();
+    info!(count = findings.len(), elapsed_ms = start.elapsed().as_millis() as u64, "semgrep done");
+    findings
 }
 
-async fn call_analyze(client: &reqwest::Client, code: &str, language: &Language) -> Vec<RawFinding> {
+async fn call_analyze(client: &reqwest::Client, req_id: &str, code: &str, language: &Language) -> Vec<RawFinding> {
     let url = format!("{}/analyze", ml_url());
     let body = serde_json::json!({
         "code": code,
         "language": language_hint(language),
     });
+    let start = std::time::Instant::now();
 
-    let resp = match client.post(&url).json(&body).send().await {
+    let resp = match with_request_id(client.post(&url).json(&body), req_id).send().await {
         Ok(r) => r,
-        Err(_) => return vec![],
+        Err(e) => {
+            warn!(error = %e, "analyze call failed");
+            return vec![];
+        }
     };
     if !resp.status().is_success() {
+        warn!(status = resp.status().as_u16(), "analyze non-success");
         return vec![];
     }
     let ml: MlResponse = match resp.json().await {
         Ok(v) => v,
-        Err(_) => return vec![],
+        Err(e) => {
+            warn!(error = %e, "analyze decode failed");
+            return vec![];
+        }
     };
     if ml.status != "ready" {
+        info!(status = %ml.status, "analyze skipped (not ready)");
         return vec![];
     }
 
-    ml.findings.into_iter().map(|mf| ml_finding_to_raw(mf, "ml")).collect()
+    let findings: Vec<RawFinding> = ml.findings.into_iter().map(|mf| ml_finding_to_raw(mf, "ml")).collect();
+    info!(count = findings.len(), elapsed_ms = start.elapsed().as_millis() as u64, "analyze done");
+    findings
 }
 
-async fn call_taint(client: &reqwest::Client, code: &str, language: &Language) -> Vec<RawFinding> {
+async fn call_taint(client: &reqwest::Client, req_id: &str, code: &str, language: &Language) -> Vec<RawFinding> {
     let url = format!("{}/taint", ml_url());
     let body = serde_json::json!({
         "code": code,
         "language": language_hint(language),
     });
+    let start = std::time::Instant::now();
 
-    let resp = match client.post(&url).json(&body).send().await {
+    let resp = match with_request_id(client.post(&url).json(&body), req_id).send().await {
         Ok(r) => r,
-        Err(_) => return vec![],
+        Err(e) => {
+            warn!(error = %e, "taint call failed");
+            return vec![];
+        }
     };
     if !resp.status().is_success() {
+        warn!(status = resp.status().as_u16(), "taint non-success");
         return vec![];
     }
     let ml: MlResponse = match resp.json().await {
         Ok(v) => v,
-        Err(_) => return vec![],
+        Err(e) => {
+            warn!(error = %e, "taint decode failed");
+            return vec![];
+        }
     };
 
-    ml.findings.into_iter().map(|mf| ml_finding_to_raw(mf, "taint")).collect()
+    let findings: Vec<RawFinding> = ml.findings.into_iter().map(|mf| ml_finding_to_raw(mf, "taint")).collect();
+    info!(count = findings.len(), elapsed_ms = start.elapsed().as_millis() as u64, "taint done");
+    findings
 }
 
 async fn call_embed_with_graph(
     client: &reqwest::Client,
+    req_id: &str,
     code: &str,
     language: &Language,
     line_starts: &[u32],
@@ -180,16 +218,23 @@ async fn call_embed_with_graph(
         "line_starts": line_starts,
     });
 
-    let resp = match client.post(&url).json(&body).send().await {
+    let resp = match with_request_id(client.post(&url).json(&body), req_id).send().await {
         Ok(r) => r,
-        Err(_) => return vec![vec![]; line_starts.len()],
+        Err(e) => {
+            warn!(error = %e, "embed call failed");
+            return vec![vec![]; line_starts.len()];
+        }
     };
     if !resp.status().is_success() {
+        warn!(status = resp.status().as_u16(), "embed non-success");
         return vec![vec![]; line_starts.len()];
     }
     let data: EmbedBatchResponse = match resp.json().await {
         Ok(v) => v,
-        Err(_) => return vec![vec![]; line_starts.len()],
+        Err(e) => {
+            warn!(error = %e, "embed decode failed");
+            return vec![vec![]; line_starts.len()];
+        }
     };
 
     data.embeddings
@@ -199,27 +244,30 @@ async fn call_embed_with_graph(
 }
 
 pub async fn scan(
+    Extension(req_id): Extension<RequestId>,
     Json(req): Json<ScanRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let scan_id = Uuid::new_v4().to_string();
     let code_hash = format!("{:x}", Sha256::digest(req.code.as_bytes()));
     let lang_str = language_hint(&req.language);
+    let lines = req.code.lines().count();
+
+    info!(scan_id = %scan_id, language = lang_str, lines, "scan start");
 
     let client = build_client().unwrap_or_default();
 
     let (semgrep_raw, ml_raw, taint_raw) = tokio::join!(
-        call_semgrep(&client, &req.code, &req.language),
-        call_analyze(&client, &req.code, &req.language),
-        call_taint(&client, &req.code, &req.language),
+        call_semgrep(&client, &req_id.0, &req.code, &req.language),
+        call_analyze(&client, &req_id.0, &req.code, &req.language),
+        call_taint(&client, &req_id.0, &req.code, &req.language),
     );
 
     let mut raw_findings: Vec<RawFinding> = semgrep_raw;
     raw_findings.extend(ml_raw);
     raw_findings.extend(taint_raw);
 
-    // Embed all findings with call-graph-augmented context
     let line_starts: Vec<u32> = raw_findings.iter().map(|r| r.finding.line_start).collect();
-    let embeddings = call_embed_with_graph(&client, &req.code, &req.language, &line_starts).await;
+    let embeddings = call_embed_with_graph(&client, &req_id.0, &req.code, &req.language, &line_starts).await;
 
     let mut findings: Vec<Finding> = Vec::new();
     for (i, r) in raw_findings.into_iter().enumerate() {
@@ -228,11 +276,13 @@ pub async fn scan(
         findings.push(r.finding);
     }
 
+    info!(scan_id = %scan_id, findings = findings.len(), "scan done");
+
     Ok(Json(ScanResponse {
         scan_id,
         findings,
         language: req.language,
-        lines_scanned: req.code.lines().count(),
+        lines_scanned: lines,
     }))
 }
 
@@ -245,12 +295,18 @@ pub async fn feedback(
     let stats = store::get_stats()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Retrain every 10 individual labels as a background signal.
-    // The primary retrain trigger is remove_from_queue (Verify Submit).
+    info!(
+        finding_id = %req.finding_id,
+        label = %req.label.to_string(),
+        total_labels = stats.total_labels,
+        "label recorded"
+    );
+
     let total = stats.total_labels;
     if total % 10 == 0 {
         let client = build_client().unwrap_or_default();
         let url = format!("{}/train", ml_url());
+        info!(total_labels = total, "secondary train trigger (every 10 labels)");
         let _ = client.post(&url).json(&serde_json::json!({})).send().await;
     }
 
@@ -261,6 +317,7 @@ pub async fn feedback(
 }
 
 pub async fn manual_finding(
+    Extension(req_id): Extension<RequestId>,
     Json(req): Json<ManualFindingRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let id = Uuid::new_v4().to_string();
@@ -275,7 +332,7 @@ pub async fn manual_finding(
     let code_snippet = source_lines.get(ls..le).map(|l| l.join("\n")).unwrap_or_default();
 
     let client = build_client().unwrap_or_default();
-    let embeddings = call_embed_with_graph(&client, &req.code, &req.language, &[req.line_start]).await;
+    let embeddings = call_embed_with_graph(&client, &req_id.0, &req.code, &req.language, &[req.line_start]).await;
     let emb = embeddings.first().filter(|v| !v.is_empty()).map(|v| v.as_slice());
 
     let rule_id = req.cwe.as_deref().unwrap_or("manual").to_string();
@@ -297,6 +354,8 @@ pub async fn manual_finding(
         &finding.id, &code_hash, &finding.rule_id, lang_str,
         finding.line_start, finding.confidence, emb,
     );
+
+    info!(finding_id = %finding.id, rule = %finding.rule_id, "manual finding added");
 
     Ok(Json(finding))
 }
@@ -344,6 +403,7 @@ pub async fn get_knowledge() -> Result<impl IntoResponse, (StatusCode, String)> 
 }
 
 pub async fn submit_knowledge(
+    Extension(req_id): Extension<RequestId>,
     Json(req): Json<SubmitKnowledgeRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     for (id, label) in &req.labels {
@@ -362,13 +422,9 @@ pub async fn submit_knowledge(
     store::submit_to_knowledge(req.case_no, &labels_json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Retrain on every Verify Submit — fire-and-forget so the response returns immediately.
-    if let Some(client) = build_client() {
-        let url = format!("{}/train", ml_url());
-        tokio::spawn(async move {
-            let _ = client.post(&url).json(&serde_json::json!({})).send().await;
-        });
-    }
+    info!(case_no = req.case_no, labels = req.labels.len(), "knowledge submitted, scheduling train");
+
+    spawn_train(&req_id.0);
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -417,18 +473,32 @@ pub async fn add_to_queue(
 }
 
 pub async fn remove_from_queue(
+    Extension(req_id): Extension<RequestId>,
     Path(case_no): Path<i64>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     store::submit_to_knowledge(case_no, "{}")
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Retrain on every Verify Submit — fire-and-forget so the response returns immediately.
-    if let Some(client) = build_client() {
-        let url = format!("{}/train", ml_url());
-        tokio::spawn(async move {
-            let _ = client.post(&url).json(&serde_json::json!({})).send().await;
-        });
-    }
+    info!(case_no, "queue item submitted, scheduling train");
+
+    spawn_train(&req_id.0);
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+fn spawn_train(req_id: &str) {
+    let Some(client) = build_client() else { return };
+    let url = format!("{}/train", ml_url());
+    let req_id = req_id.to_string();
+    tokio::spawn(async move {
+        let start = std::time::Instant::now();
+        let result = with_request_id(client.post(&url).json(&serde_json::json!({})), &req_id)
+            .send()
+            .await;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        match result {
+            Ok(r) => info!(status = r.status().as_u16(), elapsed_ms, "train completed"),
+            Err(e) => warn!(error = %e, elapsed_ms, "train failed"),
+        }
+    });
 }

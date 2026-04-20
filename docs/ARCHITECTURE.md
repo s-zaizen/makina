@@ -76,6 +76,22 @@ and avoids incremental drift.
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.
 
+## Logging
+
+Both services emit **structured JSON to stdout** (picked up by `docker compose logs`).
+
+- **Rust** — `tracing` + `tracing-subscriber` (JSON). A middleware reads or
+  generates `x-request-id` per request, attaches it to a span, echoes it
+  back in the response header, and logs method / path / status / elapsed_ms.
+- **Python ML** — stdlib `logging` + `python-json-logger`. A FastAPI
+  middleware binds `x-request-id` to a `contextvars` context; a filter
+  injects it into every log record.
+- **Propagation** — every Rust → ML HTTP call forwards `x-request-id`, so
+  logs across the two services can be joined on `request_id`.
+
+Log level is controlled by `RUST_LOG` (Rust) and `DEUS_LOG_LEVEL` (Python),
+both defaulting to `info`.
+
 ## Model Maturity Stages
 
 Stages are **descriptive** — the model is always active and learning.
@@ -133,7 +149,8 @@ deus/
 ├── crates/deus/           Rust core (axum API, SQLite, scan orchestration)
 │   └── src/
 │       ├── api/           handlers.rs, models.rs, mod.rs
-│       └── feedback/      store.rs (SQLite), mod.rs
+│       ├── feedback/      store.rs (SQLite), mod.rs
+│       └── logging.rs     tracing JSON init + request_id middleware
 ├── ml/                    Python ML service (FastAPI)
 │   └── deus_ml/
 │       ├── server.py      API endpoints + GBDT train/predict
@@ -142,6 +159,7 @@ deus/
 │       ├── taint_engine.py interprocedural taint via tree-sitter
 │       ├── call_graph.py  call graph extraction (AST + regex fallback)
 │       ├── features.py    50-element hand-crafted feature vector
+│       ├── logging_config.py  JSON logging + request_id contextvar
 │       └── semgrep_scanner.py  semgrep wrapper + language detection
 ├── frontend/              SvelteKit UI (Svelte 5 Runes, adapter-node)
 │   └── src/

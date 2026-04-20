@@ -93,7 +93,8 @@ RUN pip install --no-cache-dir \
     "tokenizers>=0.15.0" \
     "semgrep>=1.70.0" \
     "tree-sitter==0.21.3" \
-    "tree-sitter-languages==1.10.2"
+    "tree-sitter-languages==1.10.2" \
+    "python-json-logger>=2.0.7"
 
 RUN git clone --depth 1 --filter=blob:none --sparse \
         https://github.com/semgrep/semgrep-rules.git /opt/semgrep-rules \

@@ -1,9 +1,11 @@
 mod handlers;
 pub mod models;
 
-use axum::{routing::{delete, get, post}, Router};
+use axum::{middleware, routing::{delete, get, post}, Router};
 use tower_http::cors::{Any, CorsLayer};
 use std::net::SocketAddr;
+
+use crate::logging::request_id_mw;
 
 pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {
     let cors = CorsLayer::new()
@@ -19,6 +21,7 @@ pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {
         .route("/api/verify/queue", get(handlers::get_queue).post(handlers::add_to_queue))
         .route("/api/verify/queue/:case_no", delete(handlers::remove_from_queue))
         .route("/api/knowledge", get(handlers::get_knowledge).post(handlers::submit_knowledge))
+        .layer(middleware::from_fn(request_id_mw))
         .layer(cors);
 
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;

@@ -1,5 +1,6 @@
 mod api;
 mod feedback;
+mod logging;
 
 use clap::{Parser, Subcommand};
 use tracing::info;
@@ -30,12 +31,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("deus=info".parse()?),
-        )
-        .init();
+    logging::init()?;
 
     let cli = Cli::parse();
 

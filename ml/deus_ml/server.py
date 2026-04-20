@@ -10,24 +10,63 @@ Endpoints:
   POST /semgrep          rule-based scan via semgrep community rules
 """
 
+import logging
 import os
 import sqlite3
-import json
-import base64
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import uvicorn
 
 from . import embedder, analyzer, semgrep_scanner
+from .logging_config import reset_request_id, set_request_id, setup_logging
+
+setup_logging()
+logger = logging.getLogger("deus_ml")
 
 DB_PATH = Path(os.environ.get("DEUS_DB", "/root/.deus/feedback.db"))
 MODEL_PATH = Path(os.environ.get("DEUS_MODEL", "/root/.deus/model.json"))
 
 app = FastAPI(title="deus-ml", version="0.1.0")
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    token = set_request_id(req_id)
+    start = time.perf_counter()
+    status = 500
+    try:
+        resp = await call_next(request)
+        status = resp.status_code
+        resp.headers["x-request-id"] = req_id
+        return resp
+    except Exception:
+        logger.exception(
+            "request failed",
+            extra={"method": request.method, "path": request.url.path},
+        )
+        raise
+    finally:
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        # Don't log health check noise
+        if request.url.path != "/health":
+            logger.info(
+                "request",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": status,
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+        reset_request_id(token)
+
 
 # Start loading CodeBERT in the background immediately
 embedder.ensure_loaded()
@@ -52,9 +91,12 @@ def _label_count() -> dict:
 def _model_stage(total: int) -> str:
     """Maturity indicator — not a capability gate.
     The model trains and predicts from the first label onward."""
-    if total == 0:   return "bootstrapping"
-    if total < 50:   return "learning"
-    if total < 500:  return "refining"
+    if total == 0:
+        return "bootstrapping"
+    if total < 50:
+        return "learning"
+    if total < 500:
+        return "refining"
     return "mature"
 
 def _load_model():
@@ -101,6 +143,7 @@ def train(req: TrainRequest):
         raise HTTPException(status_code=500, detail="xgboost not installed.")
 
     if not DB_PATH.exists():
+        logger.info("train skipped: no database yet")
         return {"ok": False, "reason": "no database yet", "samples": 0}
 
     conn = _db()
@@ -118,11 +161,17 @@ def train(req: TrainRequest):
             y.append(1 if label == "tp" else 0)
 
     if len(set(y)) < 2:
-        # Can't train with only one class — not an error, just skip silently
+        logger.info(
+            "train skipped: single-class",
+            extra={"samples": len(X), "stage": _model_stage(len(X))},
+        )
         return {"ok": False, "reason": "need both TP and FP labels", "samples": len(X)}
 
     X_arr, y_arr = np.array(X), np.array(y)
+    tp_count = int(y_arr.sum())
+    fp_count = int(len(y_arr) - tp_count)
 
+    t0 = time.perf_counter()
     model = xgb.XGBClassifier(
         n_estimators=100,
         max_depth=4,
@@ -136,6 +185,18 @@ def train(req: TrainRequest):
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(MODEL_PATH))
+
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    logger.info(
+        "gbdt retrained",
+        extra={
+            "samples": len(X),
+            "tp": tp_count,
+            "fp": fp_count,
+            "stage": _model_stage(len(X)),
+            "elapsed_ms": elapsed_ms,
+        },
+    )
 
     return {
         "ok": True,
