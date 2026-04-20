@@ -202,13 +202,15 @@
 		const monaco = monacoRef;
 		const decs: MonacoType.editor.IModelDeltaDecoration[] = findings.map((f) => {
 			const sev = f.severity;
+			const isMl = f.source === 'ml';
 			return {
 				range: new monaco.Range(f.line_start, 1, f.line_end, 1),
 				options: {
 					isWholeLine: true,
-					className: `finding-line-${sev}`,
-					glyphMarginClassName: `finding-glyph-${sev}`,
-					overviewRulerColor: SEV_RULER[sev] ?? SEV_RULER.low,
+					className: isMl ? 'finding-line-ml' : `finding-line-${sev}`,
+					linesDecorationsClassName: isMl ? 'finding-border-ml' : undefined,
+					glyphMarginClassName: isMl ? 'finding-glyph-ml' : `finding-glyph-${sev}`,
+					overviewRulerColor: isMl ? '#8b5cf6' : (SEV_RULER[sev] ?? SEV_RULER.low),
 					overviewRulerLane: monaco.editor.OverviewRulerLane.Right
 				}
 			};
@@ -301,12 +303,16 @@
 	:global(.finding-line-high)     { background: rgba(249,115,22,0.10) !important; }
 	:global(.finding-line-medium)   { background: rgba(234,179,8,0.10) !important; }
 	:global(.finding-line-low)      { background: rgba(96,165,250,0.10) !important; }
+	:global(.finding-line-ml)       { background: rgba(139,92,246,0.18) !important; }
 	:global(.finding-line-focused)  { background: rgba(79,70,229,0.15) !important; }
+
+	:global(.finding-border-ml) { box-shadow: inset 2px 0 0 #8b5cf6; }
 
 	:global(.finding-glyph-critical)::before { content: '●'; color: #dc2626; font-size: 10px; }
 	:global(.finding-glyph-high)::before     { content: '●'; color: #ea580c; font-size: 10px; }
 	:global(.finding-glyph-medium)::before   { content: '●'; color: #ca8a04; font-size: 10px; }
 	:global(.finding-glyph-low)::before      { content: '●'; color: #2563eb; font-size: 10px; }
+	:global(.finding-glyph-ml)::before       { content: '◆'; color: #a78bfa; font-size: 10px; }
 	:global(.finding-glyph-focused)::before  { content: '▶'; color: #818cf8; font-size: 10px; }
 
 	:global(.shiki-snippet pre) {
