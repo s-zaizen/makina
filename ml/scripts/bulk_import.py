@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
 """Bulk-import vulnerability samples into deus.
 
-Loads a Hugging Face dataset, picks N vulnerable + M non-vulnerable
-samples, and injects them directly as ground-truth labels via the
-deus API — bypassing the scanner.
+Picks N vulnerable + M non-vulnerable samples from a dataset and injects
+them directly as ground-truth labels via the deus API — bypassing the
+scanner.
 
 Every /api/knowledge POST uses `?skip_train=true`, and a single
-`POST /api/retrain` is fired at the end to avoid 1000× retraining.
+`POST /api/retrain` is fired at the end to avoid N× retraining.
+
+Supported sources (pick one with --source):
+
+  cvefixes   Official CVEfixes SQLite dump (multi-language, CVE+commit
+             provenance). Download from Zenodo:
+               v1.0.7 https://zenodo.org/records/7029359   (~3.9 GB zip)
+               v1.0.8 https://zenodo.org/records/13118970  (~12 GB zip)
+             Unzip to get `CVEfixes.db`, then pass --cvefixes-db PATH.
+  hf         Hugging Face dataset via `datasets.load_dataset`.
+             Use --hf-dataset <id> --hf-adapter <bigvul|devign>.
 
 Usage
 -----
-1. Start deus (backend + ml) — the script talks to backend :7373
-   docker compose up -d
+1. Start deus (backend + ml):
+     docker compose up -d
 
 2. Install script deps (in a local venv, NOT the ml container):
-   pip install -r ml/scripts/requirements.txt
+     pip install -r ml/scripts/requirements.txt
 
 3. Run:
-   python ml/scripts/bulk_import.py --count 1000 --ratio 0.5
-
-Adapters
---------
-Different datasets use different field names. Pass --adapter to pick one;
-add a new adapter below when extending to other datasets.
+     python ml/scripts/bulk_import.py \\
+       --source cvefixes --cvefixes-db ~/data/CVEfixes.db \\
+       --count 1000 --ratio 0.5
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import sqlite3
 import sys
 import time
 import uuid
@@ -52,11 +60,6 @@ class Sample:
     message: str
 
 
-# ── Dataset adapters ─────────────────────────────────────────────────────────
-# Each adapter yields `Sample` objects from a loaded HF dataset split.
-# When adding a new dataset, register a new adapter function and add it to
-# ADAPTERS below.
-
 def _cwe_to_severity(cwe: str | None) -> str:
     if not cwe:
         return "medium"
@@ -69,21 +72,28 @@ def _cwe_to_severity(cwe: str | None) -> str:
     return "low"
 
 
+_LANG_MAP = {
+    "Python": "python",
+    "JavaScript": "javascript",
+    "TypeScript": "typescript",
+    "Java": "java",
+    "Go": "go",
+    "Ruby": "ruby",
+    "C": "c",
+    "C++": "cpp",
+    "Rust": "rust",
+}
+SUPPORTED_LANGS = set(_LANG_MAP)
+
+
+# ── Hugging Face adapters ───────────────────────────────────────────────────
+
 def adapt_bigvul(rows: Iterable[dict]) -> Iterable[Sample]:
-    """BigVul-style schemas. Expected fields:
-      func_before: str | None   (vulnerable version, present when vul==1)
-      func_after:  str | None   (patched version, present when vul==1)
-      func:        str | None   (fallback — some mirrors use this name)
-      vul:         int (0/1) | bool
-      cwe_id:      str | None   (e.g. 'CWE-89' or list)
-      cve_id:      str | None
-    """
     for row in rows:
         vul = int(row.get("vul") or row.get("target") or 0)
         if vul == 1:
             code = row.get("func_before") or row.get("func") or ""
         else:
-            # Non-vulnerable: use the patched version when available, else func
             code = row.get("func_after") or row.get("func") or row.get("func_before") or ""
         if not code or not code.strip():
             continue
@@ -95,7 +105,7 @@ def adapt_bigvul(rows: Iterable[dict]) -> Iterable[Sample]:
             cve = cve[0] if cve else None
         yield Sample(
             code=code,
-            language="c",  # BigVul is C/C++
+            language="c",
             vulnerable=(vul == 1),
             cve_id=cve,
             cwe=cwe,
@@ -105,7 +115,6 @@ def adapt_bigvul(rows: Iterable[dict]) -> Iterable[Sample]:
 
 
 def adapt_devign(rows: Iterable[dict]) -> Iterable[Sample]:
-    """Devign (CodeXGLUE Defect detection). Fields: func, target (0/1), project."""
     for row in rows:
         code = row.get("func") or ""
         target = int(row.get("target") or 0)
@@ -122,10 +131,101 @@ def adapt_devign(rows: Iterable[dict]) -> Iterable[Sample]:
         )
 
 
-ADAPTERS: dict[str, Callable[[Iterable[dict]], Iterable[Sample]]] = {
+HF_ADAPTERS: dict[str, Callable[[Iterable[dict]], Iterable[Sample]]] = {
     "bigvul": adapt_bigvul,
     "devign": adapt_devign,
 }
+
+
+# ── CVEfixes SQLite loader ──────────────────────────────────────────────────
+
+def _cvefixes_query(conn: sqlite3.Connection) -> str:
+    """Return a query that works for the columns present in this DB."""
+    mc_cols = {row[1] for row in conn.execute("PRAGMA table_info(method_change)")}
+    # v1.0.7 / v1.0.8: mc.code + mc.before_change ('True'/'False'), one row per version.
+    if "code" in mc_cols and "before_change" in mc_cols:
+        return """
+            SELECT vuln.code                        AS code_before,
+                   patched.code                     AS code_after,
+                   fc.programming_language          AS lang,
+                   cwec.cwe_id                      AS cwe,
+                   fx.cve_id                        AS cve
+            FROM method_change vuln
+            JOIN method_change patched
+                 ON patched.name = vuln.name
+                AND patched.signature = vuln.signature
+                AND patched.file_change_id = vuln.file_change_id
+                AND patched.before_change = 'False'
+            JOIN file_change fc ON vuln.file_change_id = fc.file_change_id
+            JOIN fixes fx      ON fc.hash = fx.hash
+            LEFT JOIN cwe_classification cwec ON fx.cve_id = cwec.cve_id
+            WHERE vuln.before_change = 'True'
+              AND vuln.code    IS NOT NULL
+              AND patched.code IS NOT NULL
+              AND LENGTH(vuln.code) BETWEEN 100 AND 8000
+              AND fc.programming_language IN ({langs})
+            GROUP BY vuln.method_change_id
+            ORDER BY RANDOM()
+            LIMIT ?
+        """
+    # Older dumps with paired columns on the same row.
+    return """
+        SELECT mc.code_before, mc.code_after, fc.programming_language, cwec.cwe_id, fx.cve_id
+        FROM method_change mc
+        JOIN file_change fc ON mc.file_change_id = fc.file_change_id
+        JOIN fixes fx       ON fc.hash = fx.hash
+        LEFT JOIN cwe_classification cwec ON fx.cve_id = cwec.cve_id
+        WHERE mc.code_before IS NOT NULL AND mc.code_after IS NOT NULL
+          AND LENGTH(mc.code_before) BETWEEN 100 AND 8000
+          AND fc.programming_language IN ({langs})
+        ORDER BY RANDOM()
+        LIMIT ?
+    """
+
+
+def load_cvefixes(
+    db_path: str, tp_target: int, fp_target: int, langs: list[str]
+) -> tuple[list[Sample], list[Sample]]:
+    conn = sqlite3.connect(db_path)
+    lang_sql = ",".join(f"'{lang}'" for lang in langs)
+    sql = _cvefixes_query(conn).format(langs=lang_sql)
+
+    fetch_limit = max(tp_target, fp_target) * 3
+    rows = conn.execute(sql, (fetch_limit,)).fetchall()
+    conn.close()
+
+    seen: set[str] = set()
+    tps: list[Sample] = []
+    fps: list[Sample] = []
+    for code_before, code_after, lang, cwe, cve in rows:
+        if len(tps) >= tp_target and len(fps) >= fp_target:
+            break
+        lang_tag = _LANG_MAP.get(lang)
+        if not lang_tag:
+            continue
+        if len(tps) < tp_target and code_before and code_before.strip() and code_before not in seen:
+            seen.add(code_before)
+            tps.append(Sample(
+                code=code_before,
+                language=lang_tag,
+                vulnerable=True,
+                cve_id=cve,
+                cwe=cwe,
+                severity=_cwe_to_severity(cwe) if cwe else "medium",
+                message=cwe or "vulnerable method (CVEfixes)",
+            ))
+        if len(fps) < fp_target and code_after and code_after.strip() and code_after not in seen:
+            seen.add(code_after)
+            fps.append(Sample(
+                code=code_after,
+                language=lang_tag,
+                vulnerable=False,
+                cve_id=cve,
+                cwe=None,
+                severity="low",
+                message="patched version (CVEfixes)",
+            ))
+    return tps, fps
 
 
 # ── API client ──────────────────────────────────────────────────────────────
@@ -144,7 +244,7 @@ def post_manual_finding(client: httpx.Client, s: Sample, req_id: str) -> dict:
             "cwe": s.cwe,
             "message": s.message,
         },
-        timeout=60.0,
+        timeout=120.0,
     )
     r.raise_for_status()
     return r.json()
@@ -187,16 +287,14 @@ def post_retrain(client: httpx.Client, req_id: str) -> dict:
     return r.json()
 
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# ── Hugging Face sampling ───────────────────────────────────────────────────
 
-def pick_samples(
+def pick_samples_hf(
     ds, adapter: Callable, tp_target: int, fp_target: int, max_lines: int, seed: int
 ) -> tuple[list[Sample], list[Sample]]:
-    """Stream through the dataset once, collecting TP and FP samples."""
     rng = random.Random(seed)
     tps: list[Sample] = []
     fps: list[Sample] = []
-    # Shuffle indices for pseudo-random sampling without loading everything
     indices = list(range(len(ds)))
     rng.shuffle(indices)
 
@@ -218,53 +316,68 @@ def pick_samples(
     return tps, fps
 
 
+# ── Main ────────────────────────────────────────────────────────────────────
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+    global API  # noqa: PLW0603
+
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--source", choices=["cvefixes", "hf"], required=True, help="data source")
     ap.add_argument("--count", type=int, default=1000)
     ap.add_argument("--ratio", type=float, default=0.5, help="fraction of TP samples (0..1)")
-    ap.add_argument("--dataset", default="bstee615/bigvul",
-                    help="HF dataset id (e.g. bstee615/bigvul, google/code_x_glue_cc_defect_detection)")
-    ap.add_argument("--split", default="train")
-    ap.add_argument("--adapter", choices=list(ADAPTERS), default="bigvul")
     ap.add_argument("--api", default=API)
-    ap.add_argument("--max-lines", type=int, default=200, help="skip functions longer than this")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--dry-run", action="store_true", help="pick samples but don't POST")
-    args = ap.parse_args()
 
-    global API
+    ap.add_argument("--cvefixes-db", help="path to CVEfixes.db (for --source cvefixes)")
+    ap.add_argument("--langs", default=",".join(sorted(SUPPORTED_LANGS)),
+                    help="comma-separated programming_language values to include")
+
+    ap.add_argument("--hf-dataset", help="HF dataset id, e.g. bstee615/bigvul")
+    ap.add_argument("--hf-split", default="train")
+    ap.add_argument("--hf-adapter", choices=list(HF_ADAPTERS), default="bigvul")
+    ap.add_argument("--max-lines", type=int, default=200, help="HF only — skip functions longer than this")
+
+    args = ap.parse_args()
     API = args.api
 
     tp_target = int(round(args.count * args.ratio))
     fp_target = args.count - tp_target
     print(f"Target: {tp_target} TP + {fp_target} FP = {args.count}")
-    print(f"Dataset: {args.dataset} (split={args.split}, adapter={args.adapter})")
 
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        print("Missing dependency: pip install datasets httpx tqdm", file=sys.stderr)
-        return 2
+    if args.source == "cvefixes":
+        if not args.cvefixes_db or not os.path.exists(args.cvefixes_db):
+            print("--cvefixes-db must point to an existing CVEfixes.db", file=sys.stderr)
+            return 2
+        langs = [lang for lang in args.langs.split(",") if lang]
+        print(f"Loading CVEfixes from {args.cvefixes_db} (langs={langs})…")
+        tps, fps = load_cvefixes(args.cvefixes_db, tp_target, fp_target, langs)
+    else:
+        if not args.hf_dataset:
+            print("--hf-dataset required with --source hf", file=sys.stderr)
+            return 2
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            print("Missing dep: pip install datasets", file=sys.stderr)
+            return 2
+        print(f"Loading {args.hf_dataset}…")
+        ds = load_dataset(args.hf_dataset, split=args.hf_split)
+        adapter = HF_ADAPTERS[args.hf_adapter]
+        tps, fps = pick_samples_hf(ds, adapter, tp_target, fp_target, args.max_lines, args.seed)
 
-    print(f"Loading {args.dataset}…")
-    try:
-        ds = load_dataset(args.dataset, split=args.split)
-    except Exception as e:
-        print(f"Failed to load dataset: {e}", file=sys.stderr)
-        print("Tip: --dataset google/code_x_glue_cc_defect_detection --adapter devign "
-              "is a widely-mirrored alternative.", file=sys.stderr)
-        return 2
-
-    adapter = ADAPTERS[args.adapter]
-    print(f"Dataset loaded: {len(ds)} rows. Sampling…")
-    tps, fps = pick_samples(ds, adapter, tp_target, fp_target, args.max_lines, args.seed)
     print(f"Selected: {len(tps)} TP + {len(fps)} FP")
+
+    lang_counts: dict[str, int] = {}
+    for s in tps + fps:
+        lang_counts[s.language] = lang_counts.get(s.language, 0) + 1
+    if lang_counts:
+        print("Language mix: " + ", ".join(f"{k}={v}" for k, v in sorted(lang_counts.items())))
 
     if args.dry_run:
         print("Dry run — not posting.")
         return 0
 
-    # Health check
     with httpx.Client() as client:
         try:
             client.get(f"{API}/api/stats", timeout=5.0).raise_for_status()
@@ -286,11 +399,9 @@ def main() -> int:
     t0 = time.perf_counter()
 
     with httpx.Client() as client:
-        for i, (sample, label) in enumerate(
-            tqdm([(s, "tp") for s in tps] + [(s, "fp") for s in fps],
-                 desc="Importing", unit="sample")
-        ):
-            req_id = f"bulk-{batch_id}-{i:04d}"
+        items = [(s, "tp") for s in tps] + [(s, "fp") for s in fps]
+        for i, (sample, label) in enumerate(tqdm(items, desc="Importing", unit="sample")):
+            req_id = f"bulk-{batch_id}-{i:05d}"
             try:
                 finding = post_manual_finding(client, sample, req_id)
                 case_no = post_queue(client, sample, finding, req_id)
