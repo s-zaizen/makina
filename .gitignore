@@ -50,3 +50,6 @@ desktop.ini
 # Misc
 PLAN.md
 data/
+
+# Claude Code runtime
+.claude/scheduled_tasks.lock

@@ -10,6 +10,7 @@ Endpoints:
   POST /semgrep          rule-based scan via semgrep community rules
 """
 
+import json
 import logging
 import os
 import sqlite3
@@ -31,6 +32,7 @@ logger = logging.getLogger("deus_ml")
 
 DB_PATH = Path(os.environ.get("DEUS_DB", "/root/.deus/feedback.db"))
 MODEL_PATH = Path(os.environ.get("DEUS_MODEL", "/root/.deus/model.json"))
+METRICS_PATH = Path(os.environ.get("DEUS_METRICS", "/root/.deus/metrics.json"))
 
 app = FastAPI(title="deus-ml", version="0.1.0")
 
@@ -171,42 +173,97 @@ def train(req: TrainRequest):
     tp_count = int(y_arr.sum())
     fp_count = int(len(y_arr) - tp_count)
 
+    # Train/val split — stratified 80/20 when we have enough samples; otherwise
+    # train on everything and skip validation metrics.
+    val_metrics: dict | None = None
+    can_split = min(tp_count, fp_count) >= 5
     t0 = time.perf_counter()
-    model = xgb.XGBClassifier(
-        n_estimators=100,
-        max_depth=4,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        eval_metric="logloss",
-        random_state=42,
-    )
-    model.fit(X_arr, y_arr)
+    if can_split:
+        from sklearn.model_selection import train_test_split
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_arr, y_arr, test_size=0.2, random_state=42, stratify=y_arr
+        )
+        model = xgb.XGBClassifier(
+            n_estimators=100, max_depth=4, learning_rate=0.1,
+            subsample=0.8, colsample_bytree=0.8,
+            eval_metric="logloss", random_state=42,
+        )
+        model.fit(X_train, y_train)
+        # Eval on the held-out split
+        val_pred = model.predict(X_val)
+        val_prob = model.predict_proba(X_val)[:, 1]
+        val_acc = float((val_pred == y_val).mean())
+        # TP/FP precision/recall at 0.5 cutoff
+        tp_mask = (val_pred == 1) & (y_val == 1)
+        fp_mask = (val_pred == 1) & (y_val == 0)
+        fn_mask = (val_pred == 0) & (y_val == 1)
+        tp_pred = int(tp_mask.sum())
+        fp_pred = int(fp_mask.sum())
+        fn_pred = int(fn_mask.sum())
+        precision = float(tp_pred / (tp_pred + fp_pred)) if (tp_pred + fp_pred) else 0.0
+        recall = float(tp_pred / (tp_pred + fn_pred)) if (tp_pred + fn_pred) else 0.0
+        val_metrics = {
+            "val_samples": int(len(y_val)),
+            "val_accuracy": round(val_acc, 4),
+            "val_precision": round(precision, 4),
+            "val_recall": round(recall, 4),
+            "val_prob_mean_tp": round(float(val_prob[y_val == 1].mean()), 4)
+                                if (y_val == 1).any() else None,
+            "val_prob_mean_fp": round(float(val_prob[y_val == 0].mean()), 4)
+                                if (y_val == 0).any() else None,
+        }
+        # After reporting, retrain on the full dataset so the production model
+        # uses every label available.
+        model.fit(X_arr, y_arr)
+    else:
+        model = xgb.XGBClassifier(
+            n_estimators=100, max_depth=4, learning_rate=0.1,
+            subsample=0.8, colsample_bytree=0.8,
+            eval_metric="logloss", random_state=42,
+        )
+        model.fit(X_arr, y_arr)
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(MODEL_PATH))
-
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
-    logger.info(
-        "gbdt retrained",
-        extra={
-            "samples": len(X),
-            "tp": tp_count,
-            "fp": fp_count,
-            "stage": _model_stage(len(X)),
-            "elapsed_ms": elapsed_ms,
-        },
-    )
 
-    # Fresh labels just landed — invalidate analyzer's kNN index so the next
-    # /analyze call rebuilds it from the updated feedback.db.
+    from datetime import datetime, timezone
+    metrics = {
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "samples": len(X),
+        "tp": tp_count,
+        "fp": fp_count,
+        "stage": _model_stage(len(X)),
+        "elapsed_ms": elapsed_ms,
+        "split": "80/20 stratified" if can_split else "no split (insufficient per-class samples)",
+        **(val_metrics or {}),
+    }
+    try:
+        METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        METRICS_PATH.write_text(json.dumps(metrics, indent=2))
+    except Exception as e:
+        logger.warning("failed to persist metrics: %s", e)
+
+    logger.info("gbdt retrained", extra=metrics)
+
+    # Fresh labels just landed — invalidate analyzer's kNN + GBDT caches so
+    # the next /analyze call picks up the retrained artifacts.
     analyzer.reset_index()
 
-    return {
-        "ok": True,
-        "samples": len(X),
-        "model_path": str(MODEL_PATH),
-    }
+    return {"ok": True, "samples": len(X), "model_path": str(MODEL_PATH), **(val_metrics or {})}
+
+
+@app.get("/metrics")
+def get_metrics():
+    """Return the latest training metrics written by /train, or `None` if
+    the model has not been trained yet."""
+    if not METRICS_PATH.exists():
+        return {"metrics": None}
+    try:
+        return {"metrics": json.loads(METRICS_PATH.read_text())}
+    except Exception as e:
+        logger.warning("failed to read metrics: %s", e)
+        return {"metrics": None}
 
 EMBEDDING_DIM = 768
 

@@ -608,6 +608,26 @@ pub async fn remove_from_queue(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+pub async fn model_metrics(
+    Extension(req_id): Extension<RequestId>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let client = build_client()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "http client".to_string()))?;
+    let url = format!("{}/metrics", ml_url());
+    let resp = with_request_id(client.get(&url), &req_id.0)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    if !resp.status().is_success() {
+        return Err((StatusCode::BAD_GATEWAY, format!("ml /metrics: {}", resp.status())));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(body))
+}
+
 pub async fn retrain(
     Extension(req_id): Extension<RequestId>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {

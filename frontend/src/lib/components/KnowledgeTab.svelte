@@ -1,9 +1,43 @@
 <script lang="ts">
-	import type { Stats, KnowledgeCase, Label, Language } from '$lib/types';
+	import { onMount } from 'svelte';
+	import type { Stats, KnowledgeCase, Label, Language, ModelMetrics } from '$lib/types';
+	import { getModelMetrics } from '$lib/api';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import FindingCard from '$lib/components/FindingCard.svelte';
 
 	let { stats, history }: { stats: Stats | null; history: KnowledgeCase[] } = $props();
+
+	let metrics = $state<ModelMetrics | null>(null);
+	// Refetch whenever the label count changes (i.e. a retrain has fired).
+	$effect(() => {
+		void stats?.total_labels;
+		getModelMetrics().then((m) => (metrics = m)).catch(() => {});
+	});
+	onMount(() => {
+		getModelMetrics().then((m) => (metrics = m)).catch(() => {});
+	});
+
+	function formatRelative(iso: string): string {
+		const d = new Date(iso);
+		const s = Math.round((Date.now() - d.getTime()) / 1000);
+		if (s < 60) return `${s}s ago`;
+		if (s < 3600) return `${Math.round(s / 60)}m ago`;
+		if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+		return `${Math.round(s / 86400)}d ago`;
+	}
+
+	function pct(x: number | undefined): string {
+		if (x === undefined || x === null) return '–';
+		return `${(x * 100).toFixed(1)}%`;
+	}
+
+	function accColor(acc: number | undefined): string {
+		if (acc === undefined) return 'text-gray-500';
+		if (acc >= 0.85) return 'text-emerald-400';
+		if (acc >= 0.70) return 'text-indigo-400';
+		if (acc >= 0.55) return 'text-amber-400';
+		return 'text-red-400';
+	}
 
 	const STAGES = [
 		{ key: 'bootstrapping', label: 'Bootstrapping', min: 0 },
@@ -383,6 +417,112 @@
 					<p class="text-[10px] text-gray-700 text-center py-1">
 						No labels yet — verify cases to accumulate knowledge.
 					</p>
+				{/if}
+			</section>
+
+			<!-- Model Quality (validation metrics) -->
+			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
+				<div class="flex items-center justify-between mb-3">
+					<h3 class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">
+						Model Quality
+					</h3>
+					{#if metrics?.trained_at}
+						<span class="text-[9px] text-gray-600 font-mono">
+							{formatRelative(metrics.trained_at)}
+						</span>
+					{/if}
+				</div>
+
+				{#if !metrics}
+					<p class="text-[10px] text-gray-700 text-center py-2">
+						No training run yet. Submit a labeled case or run bulk import to train.
+					</p>
+				{:else if metrics.val_accuracy === undefined}
+					<p class="text-[10px] text-gray-700 text-center py-2">
+						Insufficient samples for train/val split (need ≥ 5 per class).
+						<br />
+						<span class="text-gray-600">Trained on {metrics.samples} samples.</span>
+					</p>
+				{:else}
+					<!-- Headline: val accuracy -->
+					<div class="flex items-baseline gap-2 mb-3">
+						<span class={`text-2xl font-bold tabular-nums ${accColor(metrics.val_accuracy)}`}>
+							{pct(metrics.val_accuracy)}
+						</span>
+						<span class="text-[10px] text-gray-600">val accuracy</span>
+					</div>
+
+					<!-- Accuracy bar -->
+					<div class="h-1.5 bg-gray-800 rounded-full overflow-hidden mb-3">
+						<div
+							class={`h-full transition-all duration-700 ${
+								metrics.val_accuracy >= 0.85 ? 'bg-emerald-500' :
+								metrics.val_accuracy >= 0.70 ? 'bg-indigo-500' :
+								metrics.val_accuracy >= 0.55 ? 'bg-amber-500' : 'bg-red-500'
+							}`}
+							style="width:{(metrics.val_accuracy * 100).toFixed(1)}%"
+						></div>
+					</div>
+
+					<!-- Precision / Recall -->
+					<div class="grid grid-cols-2 gap-2 mb-3">
+						<div class="bg-gray-800/50 rounded-lg p-2 text-center border border-gray-700/30">
+							<div class="text-xs font-bold tabular-nums text-gray-200">{pct(metrics.val_precision)}</div>
+							<div class="text-[9px] text-gray-600 mt-0.5">Precision</div>
+						</div>
+						<div class="bg-gray-800/50 rounded-lg p-2 text-center border border-gray-700/30">
+							<div class="text-xs font-bold tabular-nums text-gray-200">{pct(metrics.val_recall)}</div>
+							<div class="text-[9px] text-gray-600 mt-0.5">Recall</div>
+						</div>
+					</div>
+
+					<!-- Detail rows -->
+					<div class="space-y-1 text-[10px]">
+						<div class="flex justify-between">
+							<span class="text-gray-600">Split</span>
+							<span class="text-gray-400 font-mono">{metrics.split}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-gray-600">Val samples</span>
+							<span class="text-gray-400 tabular-nums">{metrics.val_samples}</span>
+						</div>
+						{#if metrics.val_prob_mean_tp !== undefined && metrics.val_prob_mean_tp !== null}
+							<div class="flex justify-between">
+								<span class="text-gray-600">Mean p(TP) on TPs</span>
+								<span class="text-emerald-500 tabular-nums">{metrics.val_prob_mean_tp.toFixed(2)}</span>
+							</div>
+						{/if}
+						{#if metrics.val_prob_mean_fp !== undefined && metrics.val_prob_mean_fp !== null}
+							<div class="flex justify-between">
+								<span class="text-gray-600">Mean p(TP) on FPs</span>
+								<span class="text-red-500 tabular-nums">{metrics.val_prob_mean_fp.toFixed(2)}</span>
+							</div>
+						{/if}
+						<div class="flex justify-between">
+							<span class="text-gray-600">Train time</span>
+							<span class="text-gray-400 tabular-nums">{(metrics.elapsed_ms / 1000).toFixed(1)}s</span>
+						</div>
+					</div>
+
+					<!-- Overfit hint -->
+					{#if metrics.val_prob_mean_tp !== undefined && metrics.val_prob_mean_fp !== undefined && metrics.val_prob_mean_tp !== null && metrics.val_prob_mean_fp !== null}
+						{@const gap = metrics.val_prob_mean_tp - metrics.val_prob_mean_fp}
+						<div class="mt-2 pt-2 border-t border-gray-800/60">
+							<div class="flex justify-between text-[10px]">
+								<span class="text-gray-600">TP/FP separation</span>
+								<span class={`tabular-nums ${gap >= 0.3 ? 'text-emerald-500' : gap >= 0.15 ? 'text-amber-500' : 'text-red-400'}`}>
+									Δ {gap.toFixed(2)}
+								</span>
+							</div>
+							<p class="text-[9px] text-gray-700 italic mt-1">
+								{gap >= 0.3
+									? 'Clear separation — model discriminates well.'
+									: gap >= 0.15
+									? 'Weak separation — confidences cluster near 0.5.'
+									: 'Near zero separation — GBDT adds little signal; collect more diverse labels.'}
+							</p>
+						</div>
+					{/if}
 				{/if}
 			</section>
 

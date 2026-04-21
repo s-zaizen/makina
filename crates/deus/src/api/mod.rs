@@ -22,6 +22,7 @@ pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {
         .route("/api/verify/queue/:case_no", delete(handlers::remove_from_queue))
         .route("/api/knowledge", get(handlers::get_knowledge).post(handlers::submit_knowledge))
         .route("/api/retrain", post(handlers::retrain))
+        .route("/api/model_metrics", get(handlers::model_metrics))
         .layer(middleware::from_fn(request_id_mw))
         .layer(cors);
 

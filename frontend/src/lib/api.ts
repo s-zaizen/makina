@@ -1,4 +1,4 @@
-import type { Finding, ScanResponse, Stats, Language, Label, VerifyCase, KnowledgeCase } from './types';
+import type { Finding, ScanResponse, Stats, Language, Label, VerifyCase, KnowledgeCase, ModelMetrics } from './types';
 
 import { PUBLIC_API_URL } from '$env/static/public';
 const BASE = PUBLIC_API_URL || 'http://localhost:7373';
@@ -30,6 +30,13 @@ export async function getStats(): Promise<Stats> {
 	const res = await fetch(`${BASE}/api/stats`);
 	if (!res.ok) throw new Error(`Stats failed: ${res.status}`);
 	return res.json();
+}
+
+export async function getModelMetrics(): Promise<ModelMetrics | null> {
+	const res = await fetch(`${BASE}/api/model_metrics`);
+	if (!res.ok) return null;
+	const body = await res.json();
+	return (body?.metrics ?? null) as ModelMetrics | null;
 }
 
 export async function addManualFinding(

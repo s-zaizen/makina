@@ -42,6 +42,22 @@ export interface Stats {
   labels_until_next_stage: number;
 }
 
+export interface ModelMetrics {
+  trained_at: string;
+  samples: number;
+  tp: number;
+  fp: number;
+  stage: string;
+  elapsed_ms: number;
+  split: string;
+  val_samples?: number;
+  val_accuracy?: number;
+  val_precision?: number;
+  val_recall?: number;
+  val_prob_mean_tp?: number | null;
+  val_prob_mean_fp?: number | null;
+}
+
 export interface VerifyCase {
   caseNo: number;
   cveId?: string | null;
