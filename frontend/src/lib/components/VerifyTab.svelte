@@ -104,7 +104,7 @@
 </script>
 
 {#if cases.length === 0}
-	<div class="flex-1 flex items-center justify-center bg-gray-950">
+	<div class="flex-1 flex items-center justify-center bg-gray-950/70">
 		<div class="text-center">
 			<div class="w-12 h-12 mx-auto mb-4 rounded-full bg-gray-800/60 border border-gray-700 flex items-center justify-center">
 				<svg class="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -112,15 +112,15 @@
 						d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
 				</svg>
 			</div>
-			<p class="text-sm text-gray-600">No cases pending.</p>
-			<p class="text-xs text-gray-700 mt-1">
+			<p class="text-lg text-gray-600">No cases pending.</p>
+			<p class="text-base text-gray-700 mt-1">
 				Scan code and click <span class="text-indigo-500 font-medium">Submit →</span> to queue a case.
 			</p>
 		</div>
 	</div>
 {:else}
-	<div class="flex-1 overflow-y-auto px-6 py-5 bg-gray-950">
-		<div class="max-w-2xl mx-auto space-y-3">
+	<div class="flex-1 overflow-y-auto px-6 py-5 bg-gray-950/70">
+		<div class="max-w-full lg:max-w-2xl xl:max-w-3xl mx-auto space-y-3">
 			<!-- Search + language filter -->
 			<div class="flex flex-col gap-2 mb-3">
 				<input
@@ -135,7 +135,7 @@
 							<button
 								onclick={() => { filterLang = filterLang === lang ? null : lang; }}
 								class={[
-									'text-[10px] px-2 py-0.5 rounded border font-mono transition-colors cursor-pointer',
+									'text-xs px-2 py-1 rounded border font-mono text-center min-w-[64px] transition-colors cursor-pointer',
 									filterLang === lang
 										? 'bg-indigo-700 border-indigo-600 text-white'
 										: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
@@ -145,7 +145,7 @@
 						{#if filterLang}
 							<button
 								onclick={() => { filterLang = null; }}
-								class="text-[10px] px-2 py-0.5 rounded border bg-gray-800 border-gray-700 text-gray-600 hover:text-gray-400 transition-colors cursor-pointer"
+								class="text-xs px-2 py-1 rounded border bg-gray-800 border-gray-700 text-gray-600 hover:text-gray-400 transition-colors cursor-pointer"
 							>✕ clear</button>
 						{/if}
 					</div>

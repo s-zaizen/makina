@@ -358,13 +358,29 @@ char* getBuffer(int size) {
 	}
 </script>
 
-<div class="flex flex-col h-screen bg-gray-950 text-gray-100">
+<div class="relative flex flex-col h-screen text-gray-100 overflow-hidden" style="background:#060a12;">
+
+	<!-- Background eye (watching you). Sits at z-0 on the page root; content
+	     panels are rendered above this but many (editor / sidebars) use their
+	     own opaque background, so the eye mainly peeks through gaps and empty
+	     states. Opacity is tuned to be ambient, not distracting. -->
+	<div
+		class="pointer-events-none fixed inset-0 flex items-center justify-center z-0"
+		aria-hidden="true"
+	>
+		<img
+			src="/eye-bg.svg"
+			alt=""
+			class="w-[135vmin] h-[135vmin] opacity-[0.18] select-none"
+			style="filter: blur(0.5px);"
+			draggable="false"
+		/>
+	</div>
 
 	<!-- Header -->
-	<div class="flex items-center gap-3 h-11 px-4 bg-gray-900 border-b border-gray-800 shrink-0">
-		<img src="/favicon.svg" alt="deus" class="w-5 h-5" />
-		<span class="text-sm font-bold text-gray-100 tracking-tight">deus</span>
-		<div class="w-px h-4 bg-gray-700 mx-1"></div>
+	<div class="relative z-10 flex items-center gap-3 h-12 px-4 bg-gray-900/90 border-b border-gray-800 shrink-0 backdrop-blur-sm">
+		<span class="text-base font-bold text-gray-100 tracking-tight">deus</span>
+		<div class="w-px h-5 bg-gray-700 mx-1"></div>
 
 		<!-- Tabs -->
 		<nav class="flex items-center gap-1">
@@ -372,7 +388,7 @@ char* getBuffer(int size) {
 				<button
 					onclick={() => (activeTab = tab)}
 					class={[
-						'flex items-center px-3 py-1 rounded text-xs font-medium capitalize transition-all',
+						'flex items-center px-3.5 py-1.5 rounded text-sm font-medium capitalize transition-all',
 						activeTab === tab
 							? 'bg-indigo-600/30 text-indigo-300 border border-indigo-700/60'
 							: 'text-gray-500 hover:text-gray-300 hover:bg-gray-800 border border-transparent'
@@ -380,7 +396,7 @@ char* getBuffer(int size) {
 				>
 					{tab}
 					{#if tab === 'verify' && verifyCases.length > 0}
-						<span class="ml-1 text-[10px] font-bold bg-indigo-600/50 text-indigo-200 rounded-full px-1.5 py-0.5">
+						<span class="ml-1.5 text-xs font-bold bg-indigo-600/50 text-indigo-200 rounded-full px-1.5 py-0.5">
 							{verifyCases.length}
 						</span>
 					{/if}
@@ -404,6 +420,7 @@ char* getBuffer(int size) {
 	</div>
 
 	<!-- Content -->
+	<div class="relative z-10 flex flex-col flex-1 min-h-0">
 	{#if activeTab === 'scan'}
 		<div class="flex flex-1 min-h-0">
 			<!-- File tree sidebar -->
@@ -436,7 +453,7 @@ char* getBuffer(int size) {
 
 			<!-- Findings panel -->
 			<div class={[
-				'overflow-y-auto p-3 flex flex-col gap-2 bg-gray-950',
+				'overflow-y-auto p-3 flex flex-col gap-2 bg-gray-950/70',
 				folderRoot ? 'hidden lg:flex w-72 xl:w-80 shrink-0' : 'hidden lg:flex w-2/5'
 			].join(' ')}>
 				{#if error}
@@ -445,10 +462,10 @@ char* getBuffer(int size) {
 					</div>
 				{/if}
 				{#if findings.length === 0 && !error}
-					<div class="text-gray-600 text-xs text-center mt-10 space-y-1">
+					<div class="text-gray-500 text-lg text-center mt-10 space-y-1.5">
 						<p>{scanning ? 'Scanning…' : 'Paste code and click Scan'}</p>
 						{#if !folderRoot}
-							<p class="text-gray-700">or drop a folder on the editor</p>
+							<p class="text-gray-600 text-base">or drop a folder on the editor</p>
 						{/if}
 					</div>
 				{/if}
@@ -478,4 +495,5 @@ char* getBuffer(int size) {
 
 	<!-- Status bar -->
 	<StatusBar {stats} />
+	</div>
 </div>

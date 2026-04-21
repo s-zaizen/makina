@@ -78,7 +78,7 @@
 				{ token: 'attribute.value', foreground: '86efac' }
 			],
 			colors: {
-				'editor.background': '#080c15',
+				'editor.background': '#00000000',
 				'editor.foreground': '#e2e8f0',
 				'editor.lineHighlightBackground': '#0f1828',
 				'editor.lineHighlightBorder': '#1a2540',
@@ -253,7 +253,7 @@
 
 <div
 	class="flex flex-col h-full relative"
-	style="background:#060a12;"
+	style="background:rgba(3,7,18,0.70);"
 	ondragover={handleDragOver}
 	ondragleave={handleDragLeave}
 	ondrop={handleDrop}
@@ -264,7 +264,7 @@
 	{#if dragging}
 		<div
 			class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded"
-			style="background:rgba(6,10,18,0.92); border:2px dashed #4f46e5;"
+			style="background:rgba(3,7,18,0.92); border:2px dashed #4f46e5;"
 		>
 			<svg class="w-10 h-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
@@ -276,17 +276,17 @@
 	<!-- Title bar -->
 	<div
 		class="flex items-center gap-3 px-4 shrink-0 border-b"
-		style="height:36px; background:#040710; border-color:#1a2035;"
+		style="height:40px; border-color:#1a2035;"
 	>
 		<div class="flex items-center gap-1.5">
 			<div class="w-2.5 h-2.5 rounded-full" style="background:#374151;"></div>
 			<div class="w-2.5 h-2.5 rounded-full" style="background:#374151;"></div>
 			<div class="w-2.5 h-2.5 rounded-full" style="background:#374151;"></div>
 		</div>
-		<span class="font-mono text-xs" style="color:#4b5563;">
+		<span class="font-mono text-sm" style="color:#6b7280;">
 			{filename ?? `source.${EXT_MAP[language]}`}
 		</span>
-		<div class="ml-auto flex items-center gap-3 text-xs" style="color:#374151;">
+		<div class="ml-auto flex items-center gap-3 text-sm" style="color:#4b5563;">
 			<span>{lineCount} lines</span>
 			{#if findings.length > 0}
 				<span style="color:#c2670b;">{findings.length} finding{findings.length !== 1 ? 's' : ''}</span>

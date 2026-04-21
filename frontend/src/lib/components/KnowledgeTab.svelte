@@ -39,6 +39,14 @@
 		return 'text-red-400';
 	}
 
+	/** Compact notation for large counts: 10000 → "10K", 1500 → "1.5K", 999 → "999". */
+	function compact(n: number): string {
+		if (n < 1000) return n.toString();
+		if (n < 10000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+		if (n < 1_000_000) return Math.round(n / 1000) + 'K';
+		return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+	}
+
 	const STAGES = [
 		{ key: 'bootstrapping', label: 'Bootstrapping', min: 0 },
 		{ key: 'learning', label: 'Learning', min: 1 },
@@ -106,6 +114,27 @@
 	let filterLang = $state<string | null>(null);
 	let filterLabel = $state<'tp' | 'fp' | null>(null);
 
+	// Virtualized list: render only the first N matches by default.
+	// With 10k+ cases, rendering every row DOM at once freezes the tab.
+	const PAGE_SIZE = 150;
+	let displayLimit = $state(PAGE_SIZE);
+
+	// Reset page limit whenever a filter changes.
+	$effect(() => {
+		void searchQuery;
+		void filterLang;
+		void filterLabel;
+		displayLimit = PAGE_SIZE;
+	});
+
+	function onListScroll(e: Event) {
+		const el = e.currentTarget as HTMLElement;
+		if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+			// Near bottom — load next page
+			displayLimit += PAGE_SIZE;
+		}
+	}
+
 	const availableLangs = $derived([...new Set(history.map((c) => c.language))]);
 
 	const filteredHistory = $derived(
@@ -164,15 +193,15 @@
 
 <div class="flex flex-1 min-h-0">
 	<!-- Left: Case list -->
-	<div class="w-60 xl:w-72 shrink-0 flex flex-col border-r border-gray-800 bg-gray-950">
+	<div class="w-56 md:w-60 lg:w-64 xl:w-72 shrink-0 flex flex-col border-r border-gray-800 bg-gray-950/70">
 		<!-- Header + search -->
 		<div class="shrink-0 border-b border-gray-800/60">
 			<div class="flex items-center gap-2 px-4 py-2.5">
-				<h2 class="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
+				<h2 class="text-xs font-semibold text-gray-500 uppercase tracking-widest">
 					Verified Cases
 				</h2>
 				{#if history.length > 0}
-					<span class="text-[10px] bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
+					<span class="text-xs bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
 						{filteredHistory.length}{filteredHistory.length !== history.length ? `/${history.length}` : ''}
 					</span>
 				{/if}
@@ -187,32 +216,38 @@
 						class="w-full bg-gray-800/60 border border-gray-700 rounded-md px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-600/60 transition-colors"
 					/>
 				</div>
-				<div class="px-3 pb-2.5 flex flex-wrap gap-1">
+				<!-- Label filters: equal-width grid -->
+				<div class="px-3 pb-2 grid grid-cols-3 gap-1">
 					{#each [['ALL', null], ['TP', 'tp'], ['FP', 'fp']] as [chipLabel, chipVal]}
 						<button
 							onclick={() => { filterLabel = chipVal as 'tp' | 'fp' | null; }}
 							class={[
-								'text-[10px] px-2 py-0.5 rounded border transition-colors',
+								'text-xs px-2 py-1 rounded border text-center transition-colors',
 								filterLabel === chipVal
 									? chipVal === 'tp' ? 'bg-emerald-700 border-emerald-600 text-white' : chipVal === 'fp' ? 'bg-red-700 border-red-600 text-white' : 'bg-indigo-700 border-indigo-600 text-white'
 									: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300 cursor-pointer'
 							].join(' ')}
 						>{chipLabel}</button>
 					{/each}
-					{#if availableLangs.length > 1}
+				</div>
+
+				<!-- Language filters: equal-width grid, 3 per row -->
+				{#if availableLangs.length > 1}
+					<div class="px-3 pb-2.5 grid grid-cols-3 gap-1">
 						{#each availableLangs as lang}
 							<button
 								onclick={() => { filterLang = filterLang === lang ? null : lang; }}
 								class={[
-									'text-[10px] px-2 py-0.5 rounded border font-mono transition-colors',
+									'text-xs px-1 py-1 rounded border font-mono text-center truncate transition-colors',
 									filterLang === lang
 										? 'bg-indigo-700 border-indigo-600 text-white'
 										: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300 cursor-pointer'
 								].join(' ')}
+								title={lang.toUpperCase()}
 							>{lang.toUpperCase()}</button>
 						{/each}
-					{/if}
-				</div>
+					</div>
+				{/if}
 			{/if}
 		</div>
 
@@ -231,12 +266,12 @@
 				<p class="text-xs text-gray-600 text-center">No cases match the current filter.</p>
 				<button
 					onclick={() => { searchQuery = ''; filterLang = null; filterLabel = null; }}
-					class="text-[10px] text-indigo-500 hover:text-indigo-400 transition-colors cursor-pointer"
+					class="text-xs text-indigo-500 hover:text-indigo-400 transition-colors cursor-pointer"
 				>Clear filters</button>
 			</div>
 		{:else}
-			<div class="flex-1 overflow-y-auto py-2">
-				{#each filteredHistory as kc (kc.caseNo)}
+			<div class="flex-1 overflow-y-auto py-2" onscroll={onListScroll}>
+				{#each filteredHistory.slice(0, displayLimit) as kc (kc.caseNo)}
 					{@const { maxSev, tpCount, fpCount } = getSeverityCounts(kc)}
 					<button
 						onclick={() => selectCase(kc.caseNo)}
@@ -251,16 +286,16 @@
 							<span class="font-mono text-xs font-bold text-indigo-400 shrink-0">
 								#{String(kc.caseNo).padStart(4, '0')}
 							</span>
-							<span class={`text-[10px] px-1 py-0.5 rounded border font-mono shrink-0 ${langColor[kc.language] ?? 'text-gray-400 bg-gray-800 border-gray-600'}`}>
+							<span class={`text-xs px-1 py-0.5 rounded border font-mono shrink-0 ${langColor[kc.language] ?? 'text-gray-400 bg-gray-800 border-gray-600'}`}>
 								{kc.language.toUpperCase()}
 							</span>
 							{#if maxSev}
-								<span class={`ml-auto text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border shrink-0 ${sevColor[maxSev]}`}>
+								<span class={`ml-auto text-xs font-bold uppercase px-1.5 py-0.5 rounded border shrink-0 ${sevColor[maxSev]}`}>
 									{maxSev}
 								</span>
 							{/if}
 						</div>
-						<div class="flex items-center gap-2 text-[10px] text-gray-600">
+						<div class="flex items-center gap-2 text-xs text-gray-600">
 							<span>{kc.findings.length} findings</span>
 							{#if tpCount > 0}<span class="text-emerald-600">TP:{tpCount}</span>{/if}
 							{#if fpCount > 0}<span class="text-red-700">FP:{fpCount}</span>{/if}
@@ -268,6 +303,15 @@
 						</div>
 					</button>
 				{/each}
+				{#if filteredHistory.length > displayLimit}
+					<div class="px-3 py-3 text-center text-xs text-gray-600">
+						Showing {displayLimit} of {filteredHistory.length}
+						<button
+							class="ml-2 text-indigo-400 hover:text-indigo-300 cursor-pointer"
+							onclick={() => (displayLimit += PAGE_SIZE)}
+						>load more</button>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -290,12 +334,12 @@
 				</div>
 
 				<!-- Finding cards -->
-				<div class="w-80 xl:w-96 shrink-0 overflow-y-auto p-3 flex flex-col gap-2 bg-gray-950 border-l border-gray-800/60">
+				<div class="hidden md:flex w-64 lg:w-72 xl:w-80 shrink-0 overflow-y-auto p-3 flex-col gap-2 bg-gray-950/70 border-l border-gray-800/60">
 					<div class="flex items-center gap-2 mb-1">
-						<span class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">
+						<span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
 							Findings
 						</span>
-						<span class="text-[10px] bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
+						<span class="text-xs bg-gray-800 text-gray-500 rounded-full px-1.5 py-0.5">
 							{selectedCase.findings.length}
 						</span>
 					</div>
@@ -313,33 +357,34 @@
 				</div>
 			</div>
 		{:else}
-			<div class="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
+			<div class="flex-1 bg-gray-950/70"></div>
+			<div class="pointer-events-none fixed top-12 bottom-9 left-0 right-0 z-20 flex flex-col items-center justify-center gap-3 text-center px-6">
 				<div class="w-12 h-12 rounded-full bg-gray-800/60 border border-gray-700 flex items-center justify-center">
 					<svg class="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
 							d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
 					</svg>
 				</div>
-				<p class="text-sm text-gray-600">Select a case to view code</p>
-				<p class="text-xs text-gray-700">Click any case in the left panel</p>
+				<p class="text-lg text-gray-600">Select a case to view code</p>
+				<p class="text-base text-gray-700">Click any case in the left panel</p>
 			</div>
 		{/if}
 	</div>
 
 	<!-- Right: Learning Status -->
-	<div class="w-64 xl:w-72 shrink-0 overflow-y-auto px-4 py-4 bg-gray-950">
-		<h2 class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest mb-4">
+	<div class="hidden lg:block w-72 xl:w-80 shrink-0 overflow-y-auto px-4 py-4 bg-gray-950/70">
+		<h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
 			Learning Status
 		</h2>
 
-		<div class="space-y-4">
+		<div class="space-y-3">
 			<!-- Stage -->
 			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
-				<h3 class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest mb-3">
+				<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
 					Model Status
 				</h3>
 				<div class="flex items-baseline gap-2 mb-3">
-					<span class={`text-lg font-bold capitalize ${stageColor[stats?.model_stage ?? 'bootstrapping']}`}>
+					<span class={`text-xl font-bold capitalize ${stageColor[stats?.model_stage ?? 'bootstrapping']}`}>
 						{stats?.model_stage ?? 'bootstrapping'}
 					</span>
 					<span class="text-xs text-gray-600">stage</span>
@@ -359,7 +404,7 @@
 					{/each}
 				</div>
 
-				<div class="text-[10px] text-gray-700">
+				<div class="text-xs text-gray-700">
 					{#each STAGES as s, i}
 						<span class={i <= stageIdx ? 'text-gray-500' : 'text-gray-700'}>
 							{s.label}{i < STAGES.length - 1 ? ' → ' : ''}
@@ -369,7 +414,7 @@
 
 				{#if nextStage !== null}
 					<div class="mt-3">
-						<div class="flex justify-between text-[10px] text-gray-700 mb-1">
+						<div class="flex justify-between text-xs text-gray-700 mb-1">
 							<span>{nextStage.label}</span>
 							<span class="text-indigo-500">{total} / {nextStage.min}</span>
 						</div>
@@ -382,26 +427,31 @@
 					</div>
 				{/if}
 
-				<p class="text-[10px] text-gray-700 italic mt-2">Retrains on every Verify Submit</p>
+				<p class="text-xs text-gray-700 italic mt-2">Retrains on every Verify Submit</p>
 			</section>
 
 			<!-- Label stats -->
 			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
-				<h3 class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest mb-3">
+				<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
 					Accumulated Labels
 				</h3>
 
-				<div class="grid grid-cols-3 gap-2 mb-3">
+				<div class="grid grid-cols-3 gap-1.5 mb-3">
 					{#each [{ label: 'Total', value: total, color: 'text-gray-100' }, { label: 'TP', value: tp, color: 'text-emerald-400' }, { label: 'FP', value: fp, color: 'text-red-400' }] as item}
-						<div class="bg-gray-800/50 rounded-lg p-2.5 text-center border border-gray-700/30">
-							<div class={`text-xl font-bold tabular-nums ${item.color}`}>{item.value}</div>
-							<div class="text-[10px] text-gray-600 mt-0.5">{item.label}</div>
+						<div
+							class="bg-gray-800/50 rounded-lg px-1.5 py-2 text-center border border-gray-700/30 min-w-0"
+							title={item.value.toLocaleString()}
+						>
+							<div class={`font-bold tabular-nums text-xl lg:text-2xl ${item.color}`}>
+								{compact(item.value)}
+							</div>
+							<div class="text-xs text-gray-600 mt-0.5">{item.label}</div>
 						</div>
 					{/each}
 				</div>
 
 				{#if total > 0}
-					<div class="flex justify-between text-[10px] text-gray-600 mb-1">
+					<div class="flex justify-between text-xs text-gray-600 mb-1">
 						<span>TP / FP ratio</span>
 						<span>
 							<span class="text-emerald-500">{Math.round(tpRatio * 100)}%</span>
@@ -414,7 +464,7 @@
 						<div class="h-full bg-red-500/60 transition-all duration-700" style="width:{(1 - tpRatio) * 100}%"></div>
 					</div>
 				{:else}
-					<p class="text-[10px] text-gray-700 text-center py-1">
+					<p class="text-xs text-gray-700 text-center py-1">
 						No labels yet — verify cases to accumulate knowledge.
 					</p>
 				{/if}
@@ -423,22 +473,22 @@
 			<!-- Model Quality (validation metrics) -->
 			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
 				<div class="flex items-center justify-between mb-3">
-					<h3 class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">
+					<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
 						Model Quality
 					</h3>
 					{#if metrics?.trained_at}
-						<span class="text-[9px] text-gray-600 font-mono">
+						<span class="text-[11px] text-gray-600 font-mono">
 							{formatRelative(metrics.trained_at)}
 						</span>
 					{/if}
 				</div>
 
 				{#if !metrics}
-					<p class="text-[10px] text-gray-700 text-center py-2">
+					<p class="text-xs text-gray-700 text-center py-2">
 						No training run yet. Submit a labeled case or run bulk import to train.
 					</p>
 				{:else if metrics.val_accuracy === undefined}
-					<p class="text-[10px] text-gray-700 text-center py-2">
+					<p class="text-xs text-gray-700 text-center py-2">
 						Insufficient samples for train/val split (need ≥ 5 per class).
 						<br />
 						<span class="text-gray-600">Trained on {metrics.samples} samples.</span>
@@ -446,10 +496,10 @@
 				{:else}
 					<!-- Headline: val accuracy -->
 					<div class="flex items-baseline gap-2 mb-3">
-						<span class={`text-2xl font-bold tabular-nums ${accColor(metrics.val_accuracy)}`}>
+						<span class={`text-xl lg:text-2xl font-bold tabular-nums ${accColor(metrics.val_accuracy)}`}>
 							{pct(metrics.val_accuracy)}
 						</span>
-						<span class="text-[10px] text-gray-600">val accuracy</span>
+						<span class="text-xs text-gray-600">val accuracy</span>
 					</div>
 
 					<!-- Accuracy bar -->
@@ -468,16 +518,16 @@
 					<div class="grid grid-cols-2 gap-2 mb-3">
 						<div class="bg-gray-800/50 rounded-lg p-2 text-center border border-gray-700/30">
 							<div class="text-xs font-bold tabular-nums text-gray-200">{pct(metrics.val_precision)}</div>
-							<div class="text-[9px] text-gray-600 mt-0.5">Precision</div>
+							<div class="text-[11px] text-gray-600 mt-0.5">Precision</div>
 						</div>
 						<div class="bg-gray-800/50 rounded-lg p-2 text-center border border-gray-700/30">
 							<div class="text-xs font-bold tabular-nums text-gray-200">{pct(metrics.val_recall)}</div>
-							<div class="text-[9px] text-gray-600 mt-0.5">Recall</div>
+							<div class="text-[11px] text-gray-600 mt-0.5">Recall</div>
 						</div>
 					</div>
 
 					<!-- Detail rows -->
-					<div class="space-y-1 text-[10px]">
+					<div class="space-y-1 text-xs">
 						<div class="flex justify-between">
 							<span class="text-gray-600">Split</span>
 							<span class="text-gray-400 font-mono">{metrics.split}</span>
@@ -508,13 +558,13 @@
 					{#if metrics.val_prob_mean_tp !== undefined && metrics.val_prob_mean_fp !== undefined && metrics.val_prob_mean_tp !== null && metrics.val_prob_mean_fp !== null}
 						{@const gap = metrics.val_prob_mean_tp - metrics.val_prob_mean_fp}
 						<div class="mt-2 pt-2 border-t border-gray-800/60">
-							<div class="flex justify-between text-[10px]">
+							<div class="flex justify-between text-xs">
 								<span class="text-gray-600">TP/FP separation</span>
 								<span class={`tabular-nums ${gap >= 0.3 ? 'text-emerald-500' : gap >= 0.15 ? 'text-amber-500' : 'text-red-400'}`}>
 									Δ {gap.toFixed(2)}
 								</span>
 							</div>
-							<p class="text-[9px] text-gray-700 italic mt-1">
+							<p class="text-[11px] text-gray-700 italic mt-1">
 								{gap >= 0.3
 									? 'Clear separation — model discriminates well.'
 									: gap >= 0.15
@@ -528,7 +578,7 @@
 
 			<!-- Summary -->
 			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
-				<h3 class="text-[10px] font-semibold text-gray-600 uppercase tracking-widest mb-3">Summary</h3>
+				<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Summary</h3>
 				<div class="space-y-1.5">
 					{#each [{ label: 'Cases verified', value: history.length }, { label: 'Findings labeled', value: total }, { label: 'True positives', value: tp }, { label: 'False positives', value: fp }] as r}
 						<div class="flex justify-between text-xs">

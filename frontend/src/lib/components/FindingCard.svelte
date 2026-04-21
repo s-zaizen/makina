@@ -91,7 +91,7 @@
 	onclick={onfocus}
 	onkeydown={(e) => e.key === 'Enter' && onfocus?.()}
 	class={[
-		'rounded border bg-gray-900 border-l-4 p-3 flex flex-col gap-2 transition-all',
+		'rounded border bg-gray-900/60 border-l-4 p-3 flex flex-col gap-2 transition-all',
 		borderColor,
 		focused
 			? 'border-gray-600 ring-1 ring-indigo-500/50 cursor-default'
