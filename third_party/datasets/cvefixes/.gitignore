@@ -6,3 +6,5 @@ CVEfixes.db-shm
 CVEfixes.db-wal
 *.zip
 CVEfixes_v*/
+# Converted deus-corpus output (see ml/scripts/converters/cvefixes.py)
+*.jsonl

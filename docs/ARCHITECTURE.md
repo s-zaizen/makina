@@ -230,6 +230,7 @@ deus/
 │       └── logging.rs     tracing JSON init + request_id middleware
 ├── ml/                    Python ML service (FastAPI)
 │   ├── scripts/           bulk_import.py (dataset → knowledge, no scan)
+│   │   └── converters/    cvefixes.py (CVEfixes.db → samples.jsonl)
 │   └── deus_ml/
 │       ├── server.py      API endpoints + GBDT train/predict
 │       ├── analyzer.py    CodeBERT semantic analysis
