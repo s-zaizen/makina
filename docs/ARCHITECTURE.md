@@ -137,13 +137,18 @@ kNN path viable; that is a future direction.
 ### Bulk import path
 
 `ml/scripts/bulk_import.py` seeds the model from curated datasets
-(CVEfixes SQLite dump, or Hugging Face datasets like BigVul). Each row
-becomes a `POST /api/findings/manual` (which embeds the snippet) → a
-one-finding verify queue case → a `POST /api/knowledge?skip_train=true`
-that labels and archives the case without triggering the per-submit
-retrain. After the batch completes, the script fires a single
-`POST /api/retrain` to bring the GBDT up to date. This avoids a
-retrain stampede when importing hundreds of samples.
+(CVEfixes SQLite dump, or Hugging Face datasets like BigVul). Datasets are
+**not vendored** — each lives under `third_party/datasets/<name>/` with a
+`fetch.sh` that pulls from the authoritative source (Zenodo for CVEfixes,
+Hugging Face for BigVul), a `README.md` with license + citation, and a
+`.gitignore` that excludes the downloaded artefacts. CVEfixes is CC BY 4.0
+(Bhandari, Naseer, Moonen, 2021); see `third_party/datasets/README.md` for
+attribution policy. Each row becomes a `POST /api/findings/manual` (which
+embeds the snippet) → a one-finding verify queue case → a
+`POST /api/knowledge?skip_train=true` that labels and archives the case
+without triggering the per-submit retrain. After the batch completes, the
+script fires a single `POST /api/retrain` to bring the GBDT up to date.
+This avoids a retrain stampede when importing hundreds of samples.
 
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.
@@ -243,6 +248,9 @@ deus/
 │           ├── api.ts     fetch wrappers (PUBLIC_API_URL)
 │           ├── types.ts   shared TypeScript types
 │           └── folder.ts  folder drag-and-drop utilities
+├── third_party/           External assets (not vendored)
+│   └── datasets/          Training datasets (fetched via per-dir fetch.sh)
+│       └── cvefixes/      CVEfixes — CC BY 4.0, see README.md
 ├── .claude/               Claude Code configuration
 │   ├── commands/          vuln-add, vuln-verify, vuln-add-verify-with-claude
 │   ├── hooks/typecheck.sh   PostToolUse: lint after Write/Edit

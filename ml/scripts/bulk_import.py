@@ -11,10 +11,11 @@ Every /api/knowledge POST uses `?skip_train=true`, and a single
 Supported sources (pick one with --source):
 
   cvefixes   Official CVEfixes SQLite dump (multi-language, CVE+commit
-             provenance). Download from Zenodo:
-               v1.0.7 https://zenodo.org/records/7029359   (~3.9 GB zip)
-               v1.0.8 https://zenodo.org/records/13118970  (~12 GB zip)
-             Unzip to get `CVEfixes.db`, then pass --cvefixes-db PATH.
+             provenance) — released under CC BY 4.0 by Bhandari, Naseer,
+             and Moonen (2021). Fetch it via the repo's helper script:
+               ./third_party/datasets/cvefixes/fetch.sh
+             See `third_party/datasets/cvefixes/README.md` for attribution
+             requirements and alternative versions (v1.0.7 / v1.0.8).
   hf         Hugging Face dataset via `datasets.load_dataset`.
              Use --hf-dataset <id> --hf-adapter <bigvul|devign>.
 
@@ -26,9 +27,13 @@ Usage
 2. Install script deps (in a local venv, NOT the ml container):
      pip install -r ml/scripts/requirements.txt
 
-3. Run:
+3. Fetch CVEfixes (one-time):
+     ./third_party/datasets/cvefixes/fetch.sh
+
+4. Run:
      python ml/scripts/bulk_import.py \\
-       --source cvefixes --cvefixes-db ~/data/CVEfixes.db \\
+       --source cvefixes \\
+       --cvefixes-db third_party/datasets/cvefixes/CVEfixes.db \\
        --count 1000 --ratio 0.5
 """
 

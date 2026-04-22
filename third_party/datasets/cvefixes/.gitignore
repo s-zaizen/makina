@@ -1,0 +1,8 @@
+# Downloaded/extracted CVEfixes artefacts — never commit.
+# The dataset is CC BY 4.0 and must be fetched from the authoritative source
+# on each clone (see README.md + fetch.sh).
+CVEfixes.db
+CVEfixes.db-shm
+CVEfixes.db-wal
+*.zip
+CVEfixes_v*/
