@@ -153,6 +153,19 @@ This avoids a retrain stampede when importing hundreds of samples.
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.
 
+`bulk_import.py` also supports two alternative input/labeling modes:
+
+- `--source jsonl --jsonl PATH` — read pre-converted `Sample` records from
+  a JSONL file (e.g. produced by `ml/scripts/converters/cvefixes.py`)
+  instead of querying CVEfixes.db each run. `--count 0` ingests every
+  row.
+- `--via-scan` — instead of injecting one manual finding per row, run
+  each sample through `POST /api/scan` and label every finding the
+  scanner emits (TP for `code_before`, FP for `code_after`). Samples
+  with zero scan findings are skipped. This aligns the training
+  embeddings with the distribution the GBDT will see at inference at
+  the cost of much slower ingestion.
+
 ## Logging
 
 Both services emit **structured JSON to stdout** (picked up by `docker compose logs`).

@@ -40,6 +40,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import sqlite3
@@ -233,7 +234,88 @@ def load_cvefixes(
     return tps, fps
 
 
+# ── JSONL loader (pre-converted deus corpus) ───────────────────────────────
+
+def load_jsonl(
+    path: str, tp_target: int, fp_target: int
+) -> tuple[list[Sample], list[Sample]]:
+    """Load Sample records from a JSONL file (one object per line).
+    ``tp_target`` / ``fp_target`` <= 0 means 'take all of that kind'.
+    """
+    tps: list[Sample] = []
+    fps: list[Sample] = []
+    with open(path, encoding="utf-8") as fh:
+        for line_no, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                s = Sample(**json.loads(line))
+            except (json.JSONDecodeError, TypeError) as e:
+                print(f"  ! line {line_no}: skipped ({e})", file=sys.stderr)
+                continue
+            if s.vulnerable:
+                if tp_target <= 0 or len(tps) < tp_target:
+                    tps.append(s)
+            else:
+                if fp_target <= 0 or len(fps) < fp_target:
+                    fps.append(s)
+            if (
+                tp_target > 0
+                and fp_target > 0
+                and len(tps) >= tp_target
+                and len(fps) >= fp_target
+            ):
+                break
+    return tps, fps
+
+
 # ── API client ──────────────────────────────────────────────────────────────
+
+def post_scan_and_label(
+    client: httpx.Client, s: Sample, label: str, req_id: str
+) -> int:
+    """Run /api/scan on the sample and label every finding it produces.
+
+    Returns the number of findings labeled. Returns 0 without queueing
+    when the scan produced no findings — those samples are skipped
+    because they carry no signal for a scanner-output classifier.
+    """
+    r = client.post(
+        f"{API}/api/scan",
+        headers={"x-request-id": req_id},
+        json={"code": s.code, "language": s.language},
+        timeout=300.0,
+    )
+    r.raise_for_status()
+    findings = r.json().get("findings", []) or []
+    if not findings:
+        return 0
+
+    r = client.post(
+        f"{API}/api/verify/queue",
+        headers={"x-request-id": req_id},
+        json={
+            "cve_id": s.cve_id,
+            "code": s.code,
+            "language": s.language,
+            "findings": findings,
+        },
+        timeout=60.0,
+    )
+    r.raise_for_status()
+    case_no = r.json()["case_no"]
+
+    labels = {f["id"]: label for f in findings}
+    r = client.post(
+        f"{API}/api/knowledge?skip_train=true",
+        headers={"x-request-id": req_id},
+        json={"case_no": case_no, "labels": labels},
+        timeout=60.0,
+    )
+    r.raise_for_status()
+    return len(findings)
+
 
 def post_manual_finding(client: httpx.Client, s: Sample, req_id: str) -> dict:
     line_count = max(1, s.code.count("\n") + 1)
@@ -327,8 +409,9 @@ def main() -> int:
     global API  # noqa: PLW0603
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--source", choices=["cvefixes", "hf"], required=True, help="data source")
-    ap.add_argument("--count", type=int, default=1000)
+    ap.add_argument("--source", choices=["cvefixes", "hf", "jsonl"], required=True, help="data source")
+    ap.add_argument("--count", type=int, default=1000,
+                    help="total samples to import (0 = all, only honored by --source jsonl)")
     ap.add_argument("--ratio", type=float, default=0.5, help="fraction of TP samples (0..1)")
     ap.add_argument("--api", default=API)
     ap.add_argument("--seed", type=int, default=42)
@@ -343,23 +426,49 @@ def main() -> int:
     ap.add_argument("--hf-adapter", choices=list(HF_ADAPTERS), default="bigvul")
     ap.add_argument("--max-lines", type=int, default=200, help="HF only — skip functions longer than this")
 
+    ap.add_argument("--jsonl", help="path to samples.jsonl (for --source jsonl)")
+    ap.add_argument(
+        "--via-scan",
+        action="store_true",
+        help="run POST /api/scan on each sample and label the produced findings "
+             "(instead of injecting a manual finding). Samples with zero scan "
+             "findings are skipped so only true scanner-output signals are fed "
+             "to the GBDT.",
+    )
+
     args = ap.parse_args()
     API = args.api
 
-    tp_target = int(round(args.count * args.ratio))
-    fp_target = args.count - tp_target
-    print(f"Target: {tp_target} TP + {fp_target} FP = {args.count}")
+    if args.count <= 0:
+        tp_target = fp_target = 0  # jsonl loader interprets this as "take all"
+        print("Target: all samples from source")
+    else:
+        tp_target = int(round(args.count * args.ratio))
+        fp_target = args.count - tp_target
+        print(f"Target: {tp_target} TP + {fp_target} FP = {args.count}")
 
     if args.source == "cvefixes":
         if not args.cvefixes_db or not os.path.exists(args.cvefixes_db):
             print("--cvefixes-db must point to an existing CVEfixes.db", file=sys.stderr)
             return 2
+        if args.count <= 0:
+            print("--count 0 (all) is only supported with --source jsonl", file=sys.stderr)
+            return 2
         langs = [lang for lang in args.langs.split(",") if lang]
         print(f"Loading CVEfixes from {args.cvefixes_db} (langs={langs})…")
         tps, fps = load_cvefixes(args.cvefixes_db, tp_target, fp_target, langs)
+    elif args.source == "jsonl":
+        if not args.jsonl or not os.path.exists(args.jsonl):
+            print("--jsonl must point to an existing .jsonl file", file=sys.stderr)
+            return 2
+        print(f"Loading samples from {args.jsonl}…")
+        tps, fps = load_jsonl(args.jsonl, tp_target, fp_target)
     else:
         if not args.hf_dataset:
             print("--hf-dataset required with --source hf", file=sys.stderr)
+            return 2
+        if args.count <= 0:
+            print("--count 0 (all) is only supported with --source jsonl", file=sys.stderr)
             return 2
         try:
             from datasets import load_dataset
@@ -401,26 +510,50 @@ def main() -> int:
 
     ok_tp = ok_fp = 0
     fail = 0
+    skipped = 0
+    findings_labeled = 0
     t0 = time.perf_counter()
 
+    items = [(s, "tp") for s in tps] + [(s, "fp") for s in fps]
+    if args.via_scan:
+        # Shuffle so partial completion stays TP/FP balanced under interrupt.
+        random.Random(args.seed).shuffle(items)
+
     with httpx.Client() as client:
-        items = [(s, "tp") for s in tps] + [(s, "fp") for s in fps]
         for i, (sample, label) in enumerate(tqdm(items, desc="Importing", unit="sample")):
             req_id = f"bulk-{batch_id}-{i:05d}"
             try:
-                finding = post_manual_finding(client, sample, req_id)
-                case_no = post_queue(client, sample, finding, req_id)
-                post_knowledge(client, case_no, finding["id"], label, req_id)
-                if label == "tp":
-                    ok_tp += 1
+                if args.via_scan:
+                    n = post_scan_and_label(client, sample, label, req_id)
+                    if n == 0:
+                        skipped += 1
+                        continue
+                    findings_labeled += n
+                    if label == "tp":
+                        ok_tp += 1
+                    else:
+                        ok_fp += 1
                 else:
-                    ok_fp += 1
+                    finding = post_manual_finding(client, sample, req_id)
+                    case_no = post_queue(client, sample, finding, req_id)
+                    post_knowledge(client, case_no, finding["id"], label, req_id)
+                    if label == "tp":
+                        ok_tp += 1
+                    else:
+                        ok_fp += 1
             except Exception as e:
                 fail += 1
                 print(f"  ! sample {i} ({label}) failed: {e}", file=sys.stderr)
 
     elapsed = time.perf_counter() - t0
-    print(f"\nImported: {ok_tp} TP + {ok_fp} FP ({fail} failed) in {elapsed:.1f}s")
+    if args.via_scan:
+        print(
+            f"\nImported: {ok_tp} TP samples + {ok_fp} FP samples "
+            f"({findings_labeled} findings labeled, {skipped} samples skipped with 0 findings, "
+            f"{fail} failed) in {elapsed:.1f}s"
+        )
+    else:
+        print(f"\nImported: {ok_tp} TP + {ok_fp} FP ({fail} failed) in {elapsed:.1f}s")
 
     print("Triggering retrain…")
     try:
