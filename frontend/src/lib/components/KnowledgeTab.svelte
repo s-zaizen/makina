@@ -8,6 +8,7 @@
 	let { stats, history }: { stats: Stats | null; history: KnowledgeCase[] } = $props();
 
 	let metrics = $state<ModelMetrics | null>(null);
+	let nowTick = $state(Date.now());
 	// Refetch whenever the label count changes (i.e. a retrain has fired).
 	$effect(() => {
 		void stats?.total_labels;
@@ -15,14 +16,23 @@
 	});
 	onMount(() => {
 		getModelMetrics().then((m) => (metrics = m)).catch(() => {});
+		// Tick every 30 s so the "trained X ago" label stays live without
+		// polling the backend (the metrics themselves only change when a
+		// retrain fires; this just keeps the relative timestamp moving).
+		const tick = setInterval(() => { nowTick = Date.now(); }, 30_000);
+		return () => clearInterval(tick);
 	});
 
-	function formatRelative(iso: string): string {
+	function formatRelative(iso: string, now: number): string {
 		const d = new Date(iso);
-		const s = Math.round((Date.now() - d.getTime()) / 1000);
+		const s = Math.round((now - d.getTime()) / 1000);
 		if (s < 60) return `${s}s ago`;
 		if (s < 3600) return `${Math.round(s / 60)}m ago`;
-		if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+		if (s < 86400) {
+			const h = Math.floor(s / 3600);
+			const m = Math.round((s % 3600) / 60);
+			return m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
+		}
 		return `${Math.round(s / 86400)}d ago`;
 	}
 
@@ -478,7 +488,7 @@
 					</h3>
 					{#if metrics?.trained_at}
 						<span class="text-[11px] text-gray-600 font-mono">
-							{formatRelative(metrics.trained_at)}
+							{formatRelative(metrics.trained_at, nowTick)}
 						</span>
 					{/if}
 				</div>

@@ -213,15 +213,42 @@ char* getBuffer(int size) {
 
 	// ── Init ─────────────────────────────────────────────────────────────────────
 
+	// Live counter for stats (cheap, 2s poll) + throttled refresh of the
+	// heavy queue/knowledge endpoints only when the label count actually
+	// moved. Keeps the header ticking during bulk imports without hammering
+	// the backend with full list fetches every interval.
+	const HEAVY_REFRESH_INTERVAL_MS = 3_000;
+	let lastSeenTotalLabels = 0;
+	let lastHeavyRefreshAt = 0;
+
+	async function refreshHeavy() {
+		try {
+			verifyCases = await getVerifyQueue();
+		} catch { /* backend not running */ }
+		try {
+			knowledgeHistory = await getKnowledgeHistory();
+		} catch { /* backend not running */ }
+		lastHeavyRefreshAt = Date.now();
+	}
+
+	async function pollTick() {
+		try {
+			const s = await getStats();
+			stats = s;
+			const moved = s.total_labels !== lastSeenTotalLabels;
+			lastSeenTotalLabels = s.total_labels;
+			if (moved && Date.now() - lastHeavyRefreshAt >= HEAVY_REFRESH_INTERVAL_MS) {
+				await refreshHeavy();
+			}
+		} catch { /* backend not running */ }
+	}
+
 	onMount(() => {
 		void preloadHighlighter();
-		refreshStats();
-		getVerifyQueue()
-			.then((q) => (verifyCases = q))
-			.catch(() => {});
-		getKnowledgeHistory()
-			.then((cases) => (knowledgeHistory = cases))
-			.catch(() => {});
+		void refreshHeavy();
+		void pollTick();
+		const tick = setInterval(() => void pollTick(), 2000);
+		return () => clearInterval(tick);
 	});
 
 	// ── Helpers ──────────────────────────────────────────────────────────────────
