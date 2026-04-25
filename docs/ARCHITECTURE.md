@@ -243,8 +243,9 @@ deus/
 │       └── logging.rs     tracing JSON init + request_id middleware
 ├── ml/                    Python ML service (FastAPI)
 │   ├── scripts/           bulk_import.py (dataset → knowledge, no scan)
-│   │   └── converters/    cvefixes.py (method pairs → samples.jsonl)
-│   │                      cvefixes_pairs.py (diff hunks → samples_pairs.jsonl)
+│   │   ├── converters/    cvefixes.py (method pairs → samples.jsonl)
+│   │   │                  cvefixes_pairs.py (diff hunks → samples_pairs.jsonl)
+│   │   └── run_ablations.py  pair-feature ablation harness (research)
 │   └── deus_ml/
 │       ├── server.py      API endpoints + GBDT train/predict
 │       ├── analyzer.py    CodeBERT semantic analysis
