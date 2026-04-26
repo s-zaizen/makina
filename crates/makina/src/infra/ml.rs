@@ -405,3 +405,105 @@ pub fn language_hint(lang: &Language) -> &'static str {
         Language::Cpp => "cpp",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_to_f32_vec_round_trips_three_values() {
+        let floats = [1.5_f32, -2.25, 0.125];
+        let bytes: Vec<u8> = floats.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let out = bytes_to_f32_vec(&bytes);
+        assert_eq!(out, floats);
+    }
+
+    #[test]
+    fn bytes_to_f32_vec_rejects_empty_input() {
+        assert_eq!(bytes_to_f32_vec(&[]), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn bytes_to_f32_vec_rejects_non_multiple_of_four() {
+        // 5 bytes is not a valid float buffer — must yield empty.
+        assert_eq!(bytes_to_f32_vec(&[0u8; 5]), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn language_hint_is_stable_for_every_variant() {
+        assert_eq!(language_hint(&Language::Auto), "auto");
+        assert_eq!(language_hint(&Language::Python), "python");
+        assert_eq!(language_hint(&Language::Rust), "rust");
+        assert_eq!(language_hint(&Language::JavaScript), "javascript");
+        assert_eq!(language_hint(&Language::TypeScript), "typescript");
+        assert_eq!(language_hint(&Language::Go), "go");
+        assert_eq!(language_hint(&Language::Java), "java");
+        assert_eq!(language_hint(&Language::Ruby), "ruby");
+        assert_eq!(language_hint(&Language::C), "c");
+        assert_eq!(language_hint(&Language::Cpp), "cpp");
+    }
+
+    #[test]
+    fn severity_from_str_handles_known_buckets() {
+        assert!(matches!(severity_from_str("critical"), Severity::Critical));
+        assert!(matches!(severity_from_str("high"), Severity::High));
+        assert!(matches!(severity_from_str("medium"), Severity::Medium));
+        assert!(matches!(severity_from_str("low"), Severity::Low));
+    }
+
+    #[test]
+    fn severity_from_str_falls_back_to_low_for_unknown() {
+        assert!(matches!(severity_from_str(""), Severity::Low));
+        assert!(matches!(severity_from_str("bogus"), Severity::Low));
+    }
+
+    #[test]
+    fn ml_finding_to_domain_marks_uncertain_band() {
+        let mk = |conf: f32| MlFinding {
+            rule_id: "r".into(),
+            message: "m".into(),
+            severity: "low".into(),
+            line_start: 1,
+            line_end: 1,
+            code_snippet: "".into(),
+            confidence: conf,
+            cwe: None,
+        };
+        // Uncertain band is [0.45, 0.65] inclusive.
+        assert!(ml_finding_to_domain(mk(0.50), "ml").is_uncertain);
+        assert!(ml_finding_to_domain(mk(0.45), "ml").is_uncertain);
+        assert!(ml_finding_to_domain(mk(0.65), "ml").is_uncertain);
+        assert!(!ml_finding_to_domain(mk(0.44), "ml").is_uncertain);
+        assert!(!ml_finding_to_domain(mk(0.66), "ml").is_uncertain);
+        assert!(!ml_finding_to_domain(mk(0.95), "ml").is_uncertain);
+    }
+
+    #[test]
+    fn ml_finding_to_domain_propagates_source_tag() {
+        let mf = MlFinding {
+            rule_id: "r".into(),
+            message: "m".into(),
+            severity: "high".into(),
+            line_start: 7,
+            line_end: 9,
+            code_snippet: "snip".into(),
+            confidence: 0.9,
+            cwe: Some("CWE-78".into()),
+        };
+        let f = ml_finding_to_domain(mf, "taint");
+        assert_eq!(f.source, "taint");
+        assert_eq!(f.line_start, 7);
+        assert_eq!(f.cwe.as_deref(), Some("CWE-78"));
+    }
+
+    #[test]
+    fn default_base_url_falls_back_when_env_missing() {
+        // Save+clear the env var so we exercise the fallback branch.
+        let prev = std::env::var("MAKINA_ML_URL").ok();
+        std::env::remove_var("MAKINA_ML_URL");
+        assert_eq!(default_base_url(), "http://localhost:8080");
+        if let Some(v) = prev {
+            std::env::set_var("MAKINA_ML_URL", v);
+        }
+    }
+}

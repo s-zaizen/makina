@@ -31,6 +31,11 @@ pub struct KnowledgeItem {
 }
 
 fn makina_dir() -> std::path::PathBuf {
+    // Tests redirect storage to a tempdir via this env var; in production
+    // it stays unset and we fall back to `~/.makina`.
+    if let Ok(custom) = std::env::var("MAKINA_HOME") {
+        return std::path::PathBuf::from(custom);
+    }
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".makina")
@@ -386,4 +391,145 @@ pub fn get_knowledge_items() -> Result<Vec<KnowledgeItem>> {
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    /// Redirects MAKINA_HOME for the duration of the scope and resets
+    /// it on drop so other tests aren't polluted.
+    struct EnvSandbox {
+        _dir: TempDir,
+        prev: Option<String>,
+    }
+
+    impl EnvSandbox {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let prev = std::env::var("MAKINA_HOME").ok();
+            std::env::set_var("MAKINA_HOME", dir.path());
+            Self { _dir: dir, prev }
+        }
+    }
+
+    impl Drop for EnvSandbox {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("MAKINA_HOME", v),
+                None => std::env::remove_var("MAKINA_HOME"),
+            }
+        }
+    }
+
+    fn fresh_db() -> EnvSandbox {
+        let s = EnvSandbox::new();
+        init_db().expect("init_db");
+        s
+    }
+
+    #[test]
+    #[serial]
+    fn save_finding_persists_and_get_stats_counts() {
+        let _s = fresh_db();
+        save_finding("f1", "hash", "rule", "python", 1, 0.9, None, None).unwrap();
+        save_finding("f2", "hash", "rule", "python", 2, 0.4, None, None).unwrap();
+
+        update_label("f1", "tp").unwrap();
+        update_label("f2", "fp").unwrap();
+
+        let s = get_stats().unwrap();
+        assert_eq!(s.total_labels, 2);
+        assert_eq!(s.tp_count, 1);
+        assert_eq!(s.fp_count, 1);
+    }
+
+    #[test]
+    #[serial]
+    fn unlabeled_findings_do_not_count_in_stats() {
+        let _s = fresh_db();
+        save_finding("a", "h", "r", "rust", 1, 0.5, None, None).unwrap();
+        save_finding("b", "h", "r", "rust", 2, 0.5, None, None).unwrap();
+        update_label("a", "tp").unwrap();
+
+        let s = get_stats().unwrap();
+        assert_eq!(s.total_labels, 1, "unlabeled rows must be excluded");
+    }
+
+    #[test]
+    #[serial]
+    fn model_stage_progression_matches_label_count() {
+        let _s = fresh_db();
+        let s0 = get_stats().unwrap();
+        assert_eq!(s0.model_stage, "bootstrapping");
+
+        // 1 label → learning
+        save_finding("a", "h", "r", "c", 1, 0.5, None, None).unwrap();
+        update_label("a", "tp").unwrap();
+        assert_eq!(get_stats().unwrap().model_stage, "learning");
+    }
+
+    #[test]
+    #[serial]
+    fn save_finding_persists_group_key_for_group_aware_training() {
+        let _s = fresh_db();
+        save_finding("a", "h", "r", "c", 1, 0.5, None, Some("CVE-2024-1")).unwrap();
+        update_label("a", "tp").unwrap();
+
+        // Read back via the same connection the trainer would use.
+        let conn = open_feedback().unwrap();
+        let group: Option<String> = conn
+            .query_row(
+                "SELECT group_key FROM findings WHERE id = ?1",
+                ["a"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(group.as_deref(), Some("CVE-2024-1"));
+    }
+
+    #[test]
+    #[serial]
+    fn add_then_submit_moves_case_from_queue_to_knowledge() {
+        let _s = fresh_db();
+        let (case_no, _) =
+            add_queue_item(Some("CVE-2024-77"), "code body", "python", "[]").unwrap();
+
+        // Initially in the verify queue, absent from knowledge.
+        assert_eq!(get_queue_items().unwrap().len(), 1);
+        assert!(get_knowledge_items().unwrap().is_empty());
+
+        submit_to_knowledge(case_no, "{\"f1\":\"tp\"}").unwrap();
+
+        // Submitted: gone from queue, present in knowledge.
+        assert!(get_queue_items().unwrap().is_empty());
+        let know = get_knowledge_items().unwrap();
+        assert_eq!(know.len(), 1);
+        assert_eq!(know[0].cve_id.as_deref(), Some("CVE-2024-77"));
+        assert_eq!(know[0].labels_json, "{\"f1\":\"tp\"}");
+    }
+
+    #[test]
+    #[serial]
+    fn knowledge_items_round_trip_findings_json() {
+        let _s = fresh_db();
+        let findings = r#"[{"id":"x","line_start":1}]"#;
+        let (case_no, _) = add_queue_item(None, "code", "rust", findings).unwrap();
+        submit_to_knowledge(case_no, "{}").unwrap();
+
+        let items = get_knowledge_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].findings_json, findings);
+    }
+
+    #[test]
+    #[serial]
+    fn init_db_is_idempotent() {
+        let _s = fresh_db();
+        // Calling init again on the same tempdir must not error.
+        init_db().expect("re-init");
+        init_db().expect("third init");
+    }
 }
