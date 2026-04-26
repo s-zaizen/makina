@@ -67,6 +67,69 @@ view layer, and `+page.svelte` the page-level state coordinator.
 └─────────────────────────────────────────────────────┘
 ```
 
+### Public deployment topology
+
+Local dev runs everything via `docker compose`. The public site at
+`makina.sh` is built differently — see [`DEPLOY.md`](DEPLOY.md) for the
+full pipeline. The shape:
+
+```mermaid
+flowchart LR
+    user([Browser])
+
+    subgraph CF["Cloudflare (free)"]
+        cfDNS[DNS<br/>makina.sh / api.makina.sh]
+        pages[Pages<br/>SvelteKit static]
+        worker[Worker<br/>makina-api-proxy<br/>Host rewrite]
+    end
+
+    subgraph GH["GitHub"]
+        repo[(s-zaizen/makina)]
+        actions[Actions workflow<br/>deploy.yml]
+        oidc[OIDC token]
+    end
+
+    subgraph GCP["GCP project: makina-prod"]
+        wif[Workload Identity<br/>Federation pool]
+        sa[makina-deployer<br/>service account]
+        ar[(Artifact Registry<br/>asia-northeast1)]
+        run[Cloud Run service<br/>makina-api<br/>1 vCPU / 2 GiB / min=1]
+        subgraph runC[Container]
+            rust[Rust API<br/>:&#36;PORT public]
+            ml[Python ML<br/>127.0.0.1:8081 loopback]
+        end
+    end
+
+    user -->|makina.sh| pages
+    user -->|api.makina.sh| worker
+    worker -->|fetch with Host: *.run.app| run
+    rust <-->|loopback HTTP| ml
+
+    repo --> actions
+    actions -- assertion.repository --> oidc
+    oidc -- exchange --> wif
+    wif -- impersonate --> sa
+    actions -- docker push --> ar
+    sa -- gcloud run deploy --> run
+    ar -.image pull.-> run
+
+    classDef cf fill:#f4811f20,stroke:#f4811f
+    classDef gcp fill:#4285f420,stroke:#4285f4
+    classDef gh fill:#33333320,stroke:#333
+    class CF,cfDNS,pages,worker cf
+    class GCP,wif,sa,ar,run,runC,rust,ml gcp
+    class GH,repo,actions,oidc gh
+```
+
+The `cloudrun` Dockerfile stage co-locates the Rust API and Python ML
+in one container so cold-start happens once, internal traffic stays on
+loopback, and only the Rust port is exposed. Cloud Run instances are
+ephemeral — there is no persistent volume, so `feedback.db` /
+`knowledge.db` / `model.json` reset on every revision. Public mode
+(the default for this deployment) disables every learning-loop write
+endpoint, so the lack of persistence is by design: the model ships as
+a frozen artefact baked into the image.
+
 ## Scan Pipeline
 
 For each scan request, three detectors run in parallel and are merged:
