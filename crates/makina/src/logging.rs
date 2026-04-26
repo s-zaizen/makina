@@ -7,7 +7,7 @@ pub struct RequestId(pub String);
 
 pub fn init() -> anyhow::Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,deus=info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,makina=info"));
 
     tracing_subscriber::fmt()
         .json()

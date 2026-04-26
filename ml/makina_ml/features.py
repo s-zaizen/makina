@@ -1,6 +1,6 @@
 """
 Feature extraction for ML training (Stage 1+).
-Called from Rust via subprocess: python -m deus_ml.features <input.json>
+Called from Rust via subprocess: python -m makina_ml.features <input.json>
 
 Input JSON: list of {code_hash, feature_vector (base64), label}
 Output: numpy-compatible feature matrix for GBDT training.
@@ -80,7 +80,7 @@ def extract_ast_features(code: str, language: str) -> np.ndarray:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python -m deus_ml.features <input.json>", file=sys.stderr)
+        print("Usage: python -m makina_ml.features <input.json>", file=sys.stderr)
         sys.exit(1)
 
     with open(sys.argv[1]) as f:

@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "deus-ml"
+name = "makina-ml"
 version = "0.1.0"
-description = "deus ML training layer"
+description = "makina ML training layer"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110.0",
@@ -18,4 +18,4 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["deus_ml"]
+packages = ["makina_ml"]

@@ -29,10 +29,10 @@ import numpy as np
 
 from . import embedder
 
-logger = logging.getLogger("deus_ml.analyzer")
+logger = logging.getLogger("makina_ml.analyzer")
 
-DB_PATH = Path(os.environ.get("DEUS_DB", "/root/.deus/feedback.db"))
-MODEL_PATH = Path(os.environ.get("DEUS_MODEL", "/root/.deus/model.json"))
+DB_PATH = Path(os.environ.get("MAKINA_DB", "/root/.makina/feedback.db"))
+MODEL_PATH = Path(os.environ.get("MAKINA_MODEL", "/root/.makina/model.json"))
 
 # ── CWE metadata + hardcoded-prototype fallback ─────────────────────────────
 

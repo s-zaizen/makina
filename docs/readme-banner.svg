@@ -114,16 +114,16 @@
        TEXT CONTENT  (right panel, x=640–1240)
        ═══════════════════════════════════════════ -->
 
-  <!-- "deus" main title -->
+  <!-- "makina" main title -->
   <!-- Shadow/glow layer -->
   <text x="648" y="310"
         font-family="'SF Mono','Cascadia Code','JetBrains Mono',ui-monospace,monospace"
         font-size="200" font-weight="700" letter-spacing="-6"
-        fill="#4f46e5" opacity="0.25" filter="url(#textGlow)">deus</text>
+        fill="#4f46e5" opacity="0.25" filter="url(#textGlow)">makina</text>
   <!-- Main text -->
   <text x="648" y="310"
         font-family="'SF Mono','Cascadia Code','JetBrains Mono',ui-monospace,monospace"
         font-size="200" font-weight="700" letter-spacing="-6"
-        fill="#e2e8f0">deus</text>
+        fill="#e2e8f0">makina</text>
 
 </svg>

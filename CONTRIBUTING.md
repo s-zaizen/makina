@@ -1,4 +1,4 @@
-# Contributing to deus
+# Contributing to makina
 
 ## Development Setup
 
@@ -30,32 +30,32 @@ inside the `ml` container so it shares the cached CodeBERT weights.
 # 0. Fetch CVEfixes (one-time, ~3.9 GB)
 ./third_party/datasets/cvefixes/fetch.sh
 
-# 1. Convert CVEfixes → method-pair samples (for bulk_import)
+# 1. Convert CVEfixes → vulnerable-method samples for bulk_import.
+#    Each row is a full method body plus the diff's deleted-line spans
+#    projected onto method-relative coordinates. Each span becomes one
+#    TP finding at import time, so the GBDT trains on per-finding
+#    embeddings (full code as context, narrow line range as the focus).
 python ml/scripts/converters/cvefixes.py
 
 # 2. Convert CVEfixes → diff-aware hunk pairs (for pair-feature experiments)
 python ml/scripts/converters/cvefixes_pairs.py
 
-# 3. Reset deus DBs (keeps CodeBERT cache and other volumes intact)
+# 3. Reset makina DBs (keeps CodeBERT cache and other volumes intact)
 docker compose exec ml rm -f \
-  /root/.deus/feedback.db /root/.deus/knowledge.db /root/.deus/verify.db \
-  /root/.deus/model.json /root/.deus/metrics.json
+  /root/.makina/feedback.db /root/.makina/knowledge.db /root/.makina/verify.db \
+  /root/.makina/model.json /root/.makina/metrics.json
 docker compose restart backend ml
 
-# 4. Bulk-import (manual-finding mode — fast, one embedding per sample)
+# 4. Bulk-import. Each case becomes a verify-queue entry with the full
+#    method as `code` and one manual finding per range; all findings
+#    are submitted as TRUE POSITIVE. --count 0 ingests every record.
 python ml/scripts/bulk_import.py \
-  --source jsonl --jsonl third_party/datasets/cvefixes/samples.jsonl \
+  --jsonl third_party/datasets/cvefixes/samples.jsonl \
   --count 0
 
-# 5. Bulk-import via real scanner (slow; labels each /api/scan finding TP/FP
-#    according to which side of the patch produced it)
-python ml/scripts/bulk_import.py \
-  --source jsonl --jsonl third_party/datasets/cvefixes/samples.jsonl \
-  --count 0 --via-scan
-
-# 6. Pair-feature ablation suite (research, runs inside the ml container)
-docker cp third_party/datasets/cvefixes/samples_pairs.jsonl deus-ml-1:/tmp/
-docker cp ml/scripts/run_ablations.py deus-ml-1:/ml/scripts/
+# 5. Pair-feature ablation suite (research, runs inside the ml container)
+docker cp third_party/datasets/cvefixes/samples_pairs.jsonl makina-ml-1:/tmp/
+docker cp ml/scripts/run_ablations.py makina-ml-1:/ml/scripts/
 docker compose exec -T ml python3 /ml/scripts/run_ablations.py \
   --pairs /tmp/samples_pairs.jsonl
 ```
@@ -63,7 +63,7 @@ docker compose exec -T ml python3 /ml/scripts/run_ablations.py \
 ## Project Layout
 
 ```
-crates/deus/   Rust core — axum API, SQLite, scan orchestration
+crates/makina/   Rust core — axum API, SQLite, scan orchestration
 ml/            Python ML service — CodeBERT, GBDT, semgrep, taint
 frontend/      SvelteKit UI — Scan / Verify / Knowledge tabs
 docs/          Architecture and design documentation

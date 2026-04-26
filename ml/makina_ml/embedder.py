@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 MODEL_ID = "microsoft/codebert-base"
-MODEL_CACHE = Path(os.environ.get("DEUS_MODELS", "/root/.deus/models"))
+MODEL_CACHE = Path(os.environ.get("MAKINA_MODELS", "/root/.makina/models"))
 
 _lock = threading.Lock()
 _tokenizer = None

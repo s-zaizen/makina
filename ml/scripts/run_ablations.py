@@ -16,7 +16,7 @@ Configurations evaluated:
   own-emb-only  - keep only own_emb (matches single-hunk baseline)
   meta-only     - drop both emb blocks (test for trivial leakage via stats/cwe/lang)
 
-Usage (inside the deus-ml container):
+Usage (inside the makina-ml container):
     docker compose exec -T ml python3 /ml/scripts/run_ablations.py \\
         --pairs /tmp/samples_pairs.jsonl
 """
@@ -49,7 +49,7 @@ def _one_hot(idx_map: dict, key, dim: int) -> np.ndarray:
 def _load_embedder():
     if "/ml" not in sys.path:
         sys.path.insert(0, "/ml")
-    from deus_ml import embedder  # noqa: E402
+    from makina_ml import embedder  # noqa: E402
     embedder.ensure_loaded()
     while not embedder.is_ready():
         print("waiting for embedder…", flush=True)
@@ -113,13 +113,13 @@ def _build_feat(emb_self, emb_other, stats_pair, cwe_oh, lang_oh, flags):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pairs", type=Path, default=Path("/tmp/samples_pairs.jsonl"))
-    ap.add_argument("--metrics-out", type=Path, default=Path("/root/.deus/ablations.json"))
+    ap.add_argument("--metrics-out", type=Path, default=Path("/root/.makina/ablations.json"))
     ap.add_argument("--cwe-topk", type=int, default=20)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument(
         "--emb-cache",
         type=Path,
-        default=Path("/root/.deus/pair_embs.npy"),
+        default=Path("/root/.makina/pair_embs.npy"),
         help="path to cache embeddings; loads if present, else computes and saves",
     )
     args = ap.parse_args()

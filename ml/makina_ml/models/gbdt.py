@@ -1,6 +1,6 @@
 """
 Stage 1 GBDT model (~200-2000 labels).
-Invoked via: python -m deus_ml.models.gbdt train <feedback.db> <output_model.json>
+Invoked via: python -m makina_ml.models.gbdt train <feedback.db> <output_model.json>
                                                   predict <model.json> <features.json>
 """
 
@@ -73,8 +73,8 @@ def predict(model_path: str, features_json: str) -> None:
 
 def main():
     if len(sys.argv) < 4:
-        print("Usage: python -m deus_ml.models.gbdt train <db> <output>", file=sys.stderr)
-        print("       python -m deus_ml.models.gbdt predict <model> <features.json>", file=sys.stderr)
+        print("Usage: python -m makina_ml.models.gbdt train <db> <output>", file=sys.stderr)
+        print("       python -m makina_ml.models.gbdt predict <model> <features.json>", file=sys.stderr)
         sys.exit(1)
 
     cmd = sys.argv[1]

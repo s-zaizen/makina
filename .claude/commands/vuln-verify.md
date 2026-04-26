@@ -1,6 +1,6 @@
 # /vuln-verify
 
-Label and submit a pending case in the deus verify queue.
+Label and submit a pending case in the makina verify queue.
 
 ## Usage
 

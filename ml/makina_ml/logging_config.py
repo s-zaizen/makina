@@ -37,7 +37,7 @@ class _RequestIdFilter(logging.Filter):
 
 
 def setup_logging() -> None:
-    level = os.environ.get("DEUS_LOG_LEVEL", "INFO").upper()
+    level = os.environ.get("MAKINA_LOG_LEVEL", "INFO").upper()
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(

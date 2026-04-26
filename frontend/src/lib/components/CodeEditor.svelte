@@ -48,7 +48,7 @@
 	const lineCount = $derived(value.split('\n').length);
 
 	function setupTheme(monaco: typeof MonacoType) {
-		monaco.editor.defineTheme('deus-dark', {
+		monaco.editor.defineTheme('makina-dark', {
 			base: 'vs-dark',
 			inherit: true,
 			rules: [
@@ -123,12 +123,12 @@
 			monacoRef = monaco;
 
 			setupTheme(monaco);
-			monaco.editor.setTheme('deus-dark');
+			monaco.editor.setTheme('makina-dark');
 
 			const instance = monaco.editor.create(containerEl, {
 				value,
 				language: LANG_MAP[language],
-				theme: 'deus-dark',
+				theme: 'makina-dark',
 				readOnly: readonly,
 				fontSize: 13,
 				fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace",

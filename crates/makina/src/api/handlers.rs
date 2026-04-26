@@ -52,7 +52,7 @@ struct RawFinding {
 }
 
 fn ml_url() -> String {
-    std::env::var("DEUS_ML_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+    std::env::var("MAKINA_ML_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
 fn language_hint(lang: &Language) -> &'static str {

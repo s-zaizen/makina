@@ -2,7 +2,7 @@
 
 **CVEfixes** is a dataset of vulnerability-fix commits collected automatically
 from open-source projects, keyed by CVE and annotated with CWE and commit
-provenance. deus uses it via `ml/scripts/bulk_import.py` to seed the GBDT with
+provenance. makina uses it via `ml/scripts/bulk_import.py` to seed the GBDT with
 curated TP/FP labels.
 
 ## License
@@ -14,7 +14,7 @@ International License (CC BY 4.0)**.
 - Copyright: © 2021–2022 Data-Driven Software Engineering Department (dataSED),
   Simula Research Laboratory, Norway.
 
-The collection scripts on GitHub are separately licensed under **MIT**; deus
+The collection scripts on GitHub are separately licensed under **MIT**; makina
 does not vendor or use those scripts.
 
 ## Attribution
@@ -72,10 +72,10 @@ After the script completes, `CVEfixes.db` is placed in this directory. The
 downloaded zip is kept alongside it so re-runs resume instead of re-downloading
 — delete it manually if you need the disk space.
 
-### 2. Import into deus
+### 2. Import into makina
 
 ```bash
-# From the repo root, with deus running (docker compose up -d):
+# From the repo root, with makina running (docker compose up -d):
 python ml/scripts/bulk_import.py \
   --source cvefixes \
   --cvefixes-db third_party/datasets/cvefixes/CVEfixes.db \

@@ -20,7 +20,7 @@ No arguments. Claude selects a CVE to process, or the user can specify one inlin
 
 If no CVE is specified, choose one that:
 - Has a public PoC or disclosed vulnerable code (NVD, GitHub advisories, project changelogs, security blogs)
-- Has a clear taint flow (source → sink) that deus can learn from
+- Has a clear taint flow (source → sink) that makina can learn from
 - Is NOT already in the verify queue (check `GET /api/verify/queue` first)
 
 ### Step 2 — Research
@@ -84,5 +84,5 @@ Vulnerability summary:
 ## Notes
 
 - Never fabricate code — only use code found in public sources.
-- If the CVE is in a language not supported by deus, say so and stop.
+- If the CVE is in a language not supported by makina, say so and stop.
 - If the scanner finds 0 findings, still queue and submit (0 findings is valid training signal for FP-heavy CVEs). Label the case with 0 findings and note "no scanner findings — submitted as negative example".

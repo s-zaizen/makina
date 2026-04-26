@@ -1,6 +1,6 @@
 # third_party/datasets
 
-External datasets used to seed deus's GBDT model via `ml/scripts/bulk_import.py`.
+External datasets used to seed makina's GBDT model via `ml/scripts/bulk_import.py`.
 
 **Nothing here ships with the repository.** Each subdirectory contains a
 `README.md` (attribution, license, citation), a `fetch.sh` (downloads the data
@@ -19,7 +19,7 @@ artefacts. Run the fetch script once per clone to populate the directory.
 The datasets are redistributed by their authoritative hosts (Zenodo for
 CVEfixes, Hugging Face for BigVul) under terms that require attribution when
 shared. We do not mirror them here — users download from the original source,
-so the CC BY 4.0 "Share" trigger never fires from deus, and we avoid stale or
+so the CC BY 4.0 "Share" trigger never fires from makina, and we avoid stale or
 mis-licensed copies. Attribution is still preserved in each subdirectory's
 `README.md` so that anyone distributing a trained model derived from these
 datasets can carry the notice forward.

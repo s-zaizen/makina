@@ -30,26 +30,26 @@ pub struct KnowledgeItem {
     pub verified_at: String,
 }
 
-fn deus_dir() -> std::path::PathBuf {
+fn makina_dir() -> std::path::PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".deus")
+        .join(".makina")
 }
 
 fn open_feedback() -> Result<Connection> {
-    let path = deus_dir().join("feedback.db");
+    let path = makina_dir().join("feedback.db");
     std::fs::create_dir_all(path.parent().unwrap())?;
     Ok(Connection::open(path)?)
 }
 
 fn open_verify() -> Result<Connection> {
-    let path = deus_dir().join("verify.db");
+    let path = makina_dir().join("verify.db");
     std::fs::create_dir_all(path.parent().unwrap())?;
     Ok(Connection::open(path)?)
 }
 
 fn open_knowledge() -> Result<Connection> {
-    let path = deus_dir().join("knowledge.db");
+    let path = makina_dir().join("knowledge.db");
     std::fs::create_dir_all(path.parent().unwrap())?;
     Ok(Connection::open(path)?)
 }

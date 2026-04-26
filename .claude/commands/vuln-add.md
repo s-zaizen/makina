@@ -1,6 +1,6 @@
 # /vuln-add
 
-Add a vulnerable code snippet to the deus verify queue.
+Add a vulnerable code snippet to the makina verify queue.
 
 ## Usage
 
@@ -8,7 +8,7 @@ Add a vulnerable code snippet to the deus verify queue.
 /vuln-add {code}
 ```
 
-`{code}` is a block of vulnerable source code (any language supported by deus).
+`{code}` is a block of vulnerable source code (any language supported by makina).
 
 ## What to do
 
@@ -19,7 +19,7 @@ Add a vulnerable code snippet to the deus verify queue.
    - Contains no recognisable vulnerability pattern (no taint source, no dangerous sink, no obvious CWE)
    - Is clearly configuration-only or a placeholder (`TODO`, `...`, `pass` body only)
 
-3. **Scan** — POST to the deus scan API:
+3. **Scan** — POST to the makina scan API:
    ```
    POST http://localhost:7373/api/scan
    {"code": "<snippet>", "language": "<lang>"}

@@ -7,15 +7,15 @@ FROM rust:1.86-bookworm AS backend-builder
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
-COPY crates/deus/Cargo.toml crates/deus/Cargo.toml
+COPY crates/makina/Cargo.toml crates/makina/Cargo.toml
 
-RUN mkdir -p crates/deus/src \
-    && echo 'fn main() {}' > crates/deus/src/main.rs \
+RUN mkdir -p crates/makina/src \
+    && echo 'fn main() {}' > crates/makina/src/main.rs \
     && cargo build --release \
-    && rm -rf crates/deus/src
+    && rm -rf crates/makina/src
 
 COPY crates/ crates/
-RUN touch crates/deus/src/main.rs && cargo build --release
+RUN touch crates/makina/src/main.rs && cargo build --release
 
 FROM debian:bookworm-slim AS backend
 
@@ -23,12 +23,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=backend-builder /build/target/release/deus /usr/local/bin/deus
+COPY --from=backend-builder /build/target/release/makina /usr/local/bin/makina
 
-VOLUME ["/root/.deus"]
+VOLUME ["/root/.makina"]
 EXPOSE 7373
 
-ENTRYPOINT ["deus"]
+ENTRYPOINT ["makina"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "7373"]
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -77,7 +77,7 @@ RUN apt-get update \
 WORKDIR /ml
 
 COPY ml/pyproject.toml ./
-COPY ml/deus_ml/ ./deus_ml/
+COPY ml/makina_ml/ ./makina_ml/
 COPY ml/semgrep-custom/ /opt/semgrep-custom/
 
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
@@ -110,10 +110,10 @@ RUN git clone --depth 1 --filter=blob:none --sparse \
         rust/lang/security \
     && rm -rf /opt/semgrep-rules/.git
 
-VOLUME ["/root/.deus"]
+VOLUME ["/root/.makina"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
     CMD curl -sf http://localhost:8080/health || exit 1
 
-CMD ["python", "-m", "deus_ml.server"]
+CMD ["python", "-m", "makina_ml.server"]

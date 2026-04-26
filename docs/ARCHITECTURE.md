@@ -1,8 +1,8 @@
-# deus — Architecture
+# makina — Architecture
 
 ## Design Philosophy
 
-deus is a security scanner that continuously self-learns from human verification.
+makina is a security scanner that continuously self-learns from human verification.
 The model updates on **every Verify Submit** — not at fixed thresholds.
 Label count is a maturity indicator, not a capability gate.
 
@@ -22,9 +22,9 @@ Label count is a maturity indicator, not a capability gate.
 │  - /api/knowledge     (GET / POST[?skip_train])     │
 │  - /api/retrain       (POST — proxy to ML /train)   │
 │  - /api/stats                                       │
-│  SQLite  ~/.deus/feedback.db  (ML training data)    │
-│  SQLite  ~/.deus/verify.db    (pending queue)       │
-│  SQLite  ~/.deus/knowledge.db (verified cases)      │
+│  SQLite  ~/.makina/feedback.db  (ML training data)    │
+│  SQLite  ~/.makina/verify.db    (pending queue)       │
+│  SQLite  ~/.makina/knowledge.db (verified cases)      │
 └──────────┬──────────────────────────────────────────┘
            │ HTTP (internal)
 ┌──────────▼──────────────────────────────────────────┐
@@ -112,7 +112,7 @@ Rust core calls POST /train (fire-and-forget)
   ↓
 ML service retrains GBDT on ALL accumulated (embedding, label) pairs
   ↓
-New model.json written to ~/.deus/model.json
+New model.json written to ~/.makina/model.json
   ↓
 Next scan uses updated GBDT confidence scores
 ```
@@ -136,35 +136,43 @@ kNN path viable; that is a future direction.
 
 ### Bulk import path
 
-`ml/scripts/bulk_import.py` seeds the model from curated datasets
-(CVEfixes SQLite dump, or Hugging Face datasets like BigVul). Datasets are
-**not vendored** — each lives under `third_party/datasets/<name>/` with a
-`fetch.sh` that pulls from the authoritative source (Zenodo for CVEfixes,
-Hugging Face for BigVul), a `README.md` with license + citation, and a
-`.gitignore` that excludes the downloaded artefacts. CVEfixes is CC BY 4.0
-(Bhandari, Naseer, Moonen, 2021); see `third_party/datasets/README.md` for
-attribution policy. Each row becomes a `POST /api/findings/manual` (which
-embeds the snippet) → a one-finding verify queue case → a
-`POST /api/knowledge?skip_train=true` that labels and archives the case
-without triggering the per-submit retrain. After the batch completes, the
-script fires a single `POST /api/retrain` to bring the GBDT up to date.
-This avoids a retrain stampede when importing hundreds of samples.
+`ml/scripts/bulk_import.py` seeds the model from CVEfixes-derived
+samples. The dataset itself is **not vendored** — it lives under
+`third_party/datasets/cvefixes/` with a `fetch.sh` that pulls from
+Zenodo, a `README.md` with license + citation, and a `.gitignore` that
+excludes the downloaded artefacts. CVEfixes is CC BY 4.0 (Bhandari,
+Naseer, Moonen, 2021); see `third_party/datasets/README.md` for
+attribution policy.
+
+`ml/scripts/converters/cvefixes.py` extracts one record per vulnerable
+method (`method_change.before_change='True'`): the full method body
+plus the diff's deleted-line spans projected onto method-relative
+coordinates and clustered into ranges. Each record looks like
+`{code, language, ranges:[{line_start,line_end},…], cve_id, cwe,
+severity, filename}`.
+
+`bulk_import.py` then plays each record back as a Verify Submit:
+
+1. For every range, `POST /api/findings/manual` with the full method as
+   `code` and the range as `(line_start, line_end)`. The backend embeds
+   the snippet via `/embed_with_graph` so the resulting feature vector
+   sees the same call-graph context the live scanner would use.
+2. `POST /api/verify/queue` bundles all findings under one case keyed
+   by the CVE id.
+3. `POST /api/knowledge?skip_train=true` archives the case with every
+   finding labelled `tp` — without firing the per-submit retrain.
+
+After the batch, a single `POST /api/retrain` brings the GBDT up to
+date. This avoids a retrain stampede and keeps the training
+distribution aligned with what the model sees at inference (per-finding
+embeddings rather than whole-method labels).
 
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.
 
-`bulk_import.py` also supports two alternative input/labeling modes:
-
-- `--source jsonl --jsonl PATH` — read pre-converted `Sample` records from
-  a JSONL file (e.g. produced by `ml/scripts/converters/cvefixes.py`)
-  instead of querying CVEfixes.db each run. `--count 0` ingests every
-  row.
-- `--via-scan` — instead of injecting one manual finding per row, run
-  each sample through `POST /api/scan` and label every finding the
-  scanner emits (TP for `code_before`, FP for `code_after`). Samples
-  with zero scan findings are skipped. This aligns the training
-  embeddings with the distribution the GBDT will see at inference at
-  the cost of much slower ingestion.
+False-positive cases come from real scanner runs (the Verify tab) since
+their value depends on what the scanner actually flags; bulk import is
+TP-only seeding.
 
 ## Logging
 
@@ -179,7 +187,7 @@ Both services emit **structured JSON to stdout** (picked up by `docker compose l
 - **Propagation** — every Rust → ML HTTP call forwards `x-request-id`, so
   logs across the two services can be joined on `request_id`.
 
-Log level is controlled by `RUST_LOG` (Rust) and `DEUS_LOG_LEVEL` (Python),
+Log level is controlled by `RUST_LOG` (Rust) and `MAKINA_LOG_LEVEL` (Python),
 both defaulting to `info`.
 
 ## Model Maturity Stages
@@ -195,7 +203,7 @@ Stages are **descriptive** — the model is always active and learning.
 
 ## Data Model
 
-Three SQLite databases under `~/.deus/`:
+Three SQLite databases under `~/.makina/`:
 
 ```sql
 -- feedback.db: ML training data (read by Python ML service)
@@ -235,8 +243,8 @@ verified_at TEXT
 ## Directory Layout
 
 ```
-deus/
-├── crates/deus/           Rust core (axum API, SQLite, scan orchestration)
+makina/
+├── crates/makina/           Rust core (axum API, SQLite, scan orchestration)
 │   └── src/
 │       ├── api/           handlers.rs, models.rs, mod.rs
 │       ├── feedback/      store.rs (SQLite), mod.rs
@@ -246,7 +254,7 @@ deus/
 │   │   ├── converters/    cvefixes.py (method pairs → samples.jsonl)
 │   │   │                  cvefixes_pairs.py (diff hunks → samples_pairs.jsonl)
 │   │   └── run_ablations.py  pair-feature ablation harness (research)
-│   └── deus_ml/
+│   └── makina_ml/
 │       ├── server.py      API endpoints + GBDT train/predict
 │       ├── analyzer.py    CodeBERT semantic analysis
 │       ├── embedder.py    CodeBERT embedding (lazy-loaded)

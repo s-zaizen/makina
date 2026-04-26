@@ -25,13 +25,13 @@ yarn-error.log*
 
 # ML model artifacts (generated at runtime)
 *.json.bak
-ml/deus_ml/models/__pycache__/
+ml/makina_ml/models/__pycache__/
 
 # Database & runtime data
 *.db
 *.db-shm
 *.db-wal
-.deus/
+.makina/
 
 # OS
 .DS_Store

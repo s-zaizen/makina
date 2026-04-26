@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 #[derive(Parser)]
-#[command(name = "deus", about = "ML-enhanced security scanner", version)]
+#[command(name = "makina", about = "ML-enhanced security scanner", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Serve { host, port } => {
             feedback::store::init_db()?;
-            info!("deus server starting on http://{}:{}", host, port);
+            info!("makina server starting on http://{}:{}", host, port);
             info!("Frontend: run `npm run dev` in frontend/");
             api::serve(&host, port).await?;
         }
@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
             if runpod {
                 println!("RunPod integration: coming in Stage 3 (requires MCP connection).");
             } else {
-                println!("CPU retraining: invoke `python -m deus_ml.train` in ml/ directory.");
+                println!("CPU retraining: invoke `python -m makina_ml.train` in ml/ directory.");
             }
         }
     }

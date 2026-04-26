@@ -1,5 +1,5 @@
 """
-deus ML service — HTTP API called by the Rust core.
+makina ML service — HTTP API called by the Rust core.
 
 Endpoints:
   GET  /health           liveness probe
@@ -28,13 +28,13 @@ from . import embedder, analyzer, semgrep_scanner
 from .logging_config import reset_request_id, set_request_id, setup_logging
 
 setup_logging()
-logger = logging.getLogger("deus_ml")
+logger = logging.getLogger("makina_ml")
 
-DB_PATH = Path(os.environ.get("DEUS_DB", "/root/.deus/feedback.db"))
-MODEL_PATH = Path(os.environ.get("DEUS_MODEL", "/root/.deus/model.json"))
-METRICS_PATH = Path(os.environ.get("DEUS_METRICS", "/root/.deus/metrics.json"))
+DB_PATH = Path(os.environ.get("MAKINA_DB", "/root/.makina/feedback.db"))
+MODEL_PATH = Path(os.environ.get("MAKINA_MODEL", "/root/.makina/model.json"))
+METRICS_PATH = Path(os.environ.get("MAKINA_METRICS", "/root/.makina/metrics.json"))
 
-app = FastAPI(title="deus-ml", version="0.1.0")
+app = FastAPI(title="makina-ml", version="0.1.0")
 
 
 @app.middleware("http")
@@ -398,4 +398,4 @@ def embed_with_graph(req: EmbedWithGraphRequest):
 
 if __name__ == "__main__":
     port = int(os.environ.get("ML_PORT", 8080))
-    uvicorn.run("deus_ml.server:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("makina_ml.server:app", host="0.0.0.0", port=port, reload=False)

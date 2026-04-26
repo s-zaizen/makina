@@ -1,3 +1,5 @@
+name: makina
+
 services:
 
   backend:
@@ -8,9 +10,9 @@ services:
     ports:
       - "7373:7373"
     volumes:
-      - deus-data:/root/.deus
+      - makina-data:/root/.makina
     environment:
-      - DEUS_ML_URL=http://ml:8080
+      - MAKINA_ML_URL=http://ml:8080
     depends_on:
       ml:
         condition: service_healthy
@@ -41,11 +43,11 @@ services:
       dockerfile: Dockerfile
       target: ml
     volumes:
-      - deus-data:/root/.deus
+      - makina-data:/root/.makina
     environment:
-      - DEUS_DB=/root/.deus/feedback.db
-      - DEUS_MODEL=/root/.deus/model.json
-      - DEUS_MODELS=/root/.deus/models
+      - MAKINA_DB=/root/.makina/feedback.db
+      - MAKINA_MODEL=/root/.makina/model.json
+      - MAKINA_MODELS=/root/.makina/models
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
@@ -54,4 +56,4 @@ services:
       retries: 3
 
 volumes:
-  deus-data:
+  makina-data:
