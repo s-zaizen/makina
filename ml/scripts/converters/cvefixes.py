@@ -64,7 +64,40 @@ DEFAULT_DB = REPO_ROOT / "third_party/datasets/cvefixes/CVEfixes.db"
 DEFAULT_OUT = REPO_ROOT / "third_party/datasets/cvefixes/samples.jsonl"
 
 
-SQL = """
+# ── Per-CVE batched query design ────────────────────────────────────────────
+#
+# An earlier version of this converter ran a single mega-query joining
+# method_change × method_change × file_change × fixes × commits ×
+# cwe_classification with a trailing GROUP BY method_change_id, then
+# streamed rows back via a sqlite cursor. That works on the v1.0.7
+# dump (~7k commits) but on v1.0.8 (12k commits / 278k method_change
+# rows / 48 GB DB) sqlite has to materialise the entire grouped result
+# set in RAM before yielding the first row, which OOMs the host.
+#
+# We split the work in two:
+#
+#   1. CVE_LIST_SQL: cheap outer scan that just enumerates the CVE ids
+#      worth processing (one row per CVE, ~12k rows total). Includes
+#      the commit message so the Python-side keyword filter can drop
+#      pure refactors before any expensive fetch happens.
+#
+#   2. CVE_BATCH_SQL: scoped inner query bound to a single CVE id at
+#      a time. The result set is ≤ a handful of method_change rows,
+#      so the GROUP BY runs on tiny inputs and memory stays bounded.
+#
+# Net effect: peak memory is O(rows-per-CVE) ≈ a few KB instead of
+# O(all rows) ≈ tens of GB.
+
+CVE_LIST_SQL = """
+    SELECT DISTINCT fx.cve_id, c.msg
+    FROM fixes fx
+    JOIN file_change fc ON fc.hash = fx.hash
+    LEFT JOIN commits c ON c.hash  = fc.hash
+    WHERE fc.programming_language IN ({langs})
+      AND fc.diff_parsed IS NOT NULL
+"""
+
+CVE_BATCH_SQL = """
     SELECT vuln.code               AS vuln_code,
            vuln.start_line          AS vuln_start,
            vuln.end_line            AS vuln_end,
@@ -87,7 +120,8 @@ SQL = """
     JOIN fixes fx       ON fc.hash = fx.hash
     LEFT JOIN commits c ON fc.hash = c.hash
     LEFT JOIN cwe_classification cwec ON fx.cve_id = cwec.cve_id
-    WHERE vuln.before_change = 'True'
+    WHERE fx.cve_id = ?
+      AND vuln.before_change = 'True'
       AND vuln.code    IS NOT NULL
       AND patched.code IS NOT NULL
       AND vuln.start_line IS NOT NULL
@@ -521,8 +555,15 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    # Larger page cache + memory-resident temp tables make the per-CVE
+    # GROUP BY land entirely in RAM on the v1.0.8 (48 GB) dump. Default
+    # cache is 2 MB, which thrashes badly here.
+    conn.execute("PRAGMA cache_size = -524288")  # 512 MiB
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA mmap_size  = 1073741824")  # 1 GiB
     lang_sql = ",".join(f"'{lang}'" for lang in args.langs)
-    sql = SQL.format(langs=lang_sql)
+    cve_list_sql = CVE_LIST_SQL.format(langs=lang_sql)
+    cve_batch_sql = CVE_BATCH_SQL.format(langs=lang_sql)
 
     seen: set[str] = set()
     counters = {
@@ -546,9 +587,34 @@ def main() -> int:
     # tuples: (cve, lang_tag, patched_code, fp_ranges_method_relative)
 
     with args.out.open("w", encoding="utf-8") as fh:
-        cur = conn.execute(
-            sql, (args.min_len, args.max_len, args.min_len, args.max_len)
+        # Outer scan — enumerate every (cve_id, commit_msg) tuple. This is
+        # cheap (one row per CVE, ~12k in v1.0.8) and lets us reject
+        # refactor-only CVEs before the heavier inner JOIN runs.
+        cve_rows = conn.execute(cve_list_sql).fetchall()
+        print(
+            f"Found {len(cve_rows)} CVEs with at least one in-language fix.",
+            file=sys.stderr,
+            flush=True,
         )
+        rows_iter: list[tuple] = []
+
+        def _yield_rows():
+            for cve_id, commit_msg in cve_rows:
+                if cve_id is None:
+                    continue
+                if _should_skip_commit(commit_msg):
+                    counters["commit_msg"] += 1
+                    continue
+                # Per-CVE inner query — bounded result set.
+                cur = conn.execute(
+                    cve_batch_sql,
+                    (cve_id, args.min_len, args.max_len, args.min_len, args.max_len),
+                )
+                for row in cur:
+                    yield row
+
+        rows_iter = _yield_rows()  # type: ignore[assignment]
+
         for (
             vuln_code,
             vuln_start,
@@ -562,7 +628,7 @@ def main() -> int:
             cwe,
             cve,
             commit_msg,
-        ) in cur:
+        ) in rows_iter:
             lang_tag = _LANG_MAP.get(lang)
             if not lang_tag:
                 counters["lang"] += 1
@@ -572,9 +638,10 @@ def main() -> int:
                 counters["filename"] += 1
                 continue
 
-            if _should_skip_commit(commit_msg):
-                counters["commit_msg"] += 1
-                continue
+            # commit-msg filter already ran in the outer CVE scan;
+            # commit_msg is kept in the row tuple only for parity with
+            # earlier signatures. No re-check needed here.
+            del commit_msg
 
             try:
                 vs, ve = int(vuln_start), int(vuln_end)
