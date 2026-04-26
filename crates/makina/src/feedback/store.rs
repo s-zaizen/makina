@@ -261,10 +261,15 @@ pub fn get_stats() -> Result<Stats> {
 
     // Maturity indicator — not a capability gate.
     // The model trains from the first label onward; stage reflects confidence level.
-    let stage = if total == 0 { "bootstrapping" }
-                else if total < 50  { "learning" }
-                else if total < 500 { "refining" }
-                else                { "mature" };
+    let stage = if total == 0 {
+        "bootstrapping"
+    } else if total < 50 {
+        "learning"
+    } else if total < 500 {
+        "refining"
+    } else {
+        "mature"
+    };
 
     Ok(Stats {
         total_labels: total,

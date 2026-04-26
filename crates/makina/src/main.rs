@@ -1,5 +1,6 @@
 mod api;
 mod feedback;
+mod infra;
 mod logging;
 
 use clap::{Parser, Subcommand};
@@ -44,10 +45,16 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Retrain { runpod } => {
             let stats = feedback::store::get_stats()?;
-            println!("Labels: {} (TP: {}, FP: {})", stats.total_labels, stats.tp_count, stats.fp_count);
+            println!(
+                "Labels: {} (TP: {}, FP: {})",
+                stats.total_labels, stats.tp_count, stats.fp_count
+            );
             println!("Model stage: {}", stats.model_stage);
             if stats.total_labels < 200 {
-                println!("Need {} more labels before retraining.", 200 - stats.total_labels);
+                println!(
+                    "Need {} more labels before retraining.",
+                    200 - stats.total_labels
+                );
                 return Ok(());
             }
             if runpod {
