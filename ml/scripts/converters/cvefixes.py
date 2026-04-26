@@ -75,7 +75,8 @@ SQL = """
            fc.programming_language  AS lang,
            fc.filename,
            cwec.cwe_id              AS cwe,
-           fx.cve_id                AS cve
+           fx.cve_id                AS cve,
+           c.msg                    AS commit_msg
     FROM method_change vuln
     JOIN method_change patched
          ON patched.name = vuln.name
@@ -84,6 +85,7 @@ SQL = """
         AND patched.before_change = 'False'
     JOIN file_change fc ON vuln.file_change_id = fc.file_change_id
     JOIN fixes fx       ON fc.hash = fx.hash
+    LEFT JOIN commits c ON fc.hash = c.hash
     LEFT JOIN cwe_classification cwec ON fx.cve_id = cwec.cve_id
     WHERE vuln.before_change = 'True'
       AND vuln.code    IS NOT NULL
@@ -123,12 +125,218 @@ def _cluster(nums: list[int], gap: int) -> list[tuple[int, int]]:
     return out
 
 
+# Skip non-code or test-only files — CVEfixes flags every method touched
+# in the security commit, but test cases and docs around the fix carry no
+# vulnerability signal and pollute the labelled set with structural false
+# positives.
+_SKIP_FILENAME_SUBSTR = (
+    "/test/",
+    "/tests/",
+    "/spec/",
+    "/specs/",
+    "/__tests__/",
+    "_test.",
+    ".test.",
+    "test_",
+    "_spec.",
+    "spec_",
+    ".spec.",
+    "/fixtures/",
+    "/testdata/",
+    "/example",
+    "/examples/",
+    "/doc/",
+    "/docs/",
+    "CHANGELOG",
+    "README",
+    "LICENSE",
+    "NEWS",
+    "AUTHORS",
+    ".md",
+    ".rst",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".svg",
+)
+
+
+def _should_skip_file(filename: str | None) -> bool:
+    if not filename:
+        return False
+    low = filename.lower()
+    return any(s.lower() in low for s in _SKIP_FILENAME_SUBSTR)
+
+
+# Commit-message filter. Many CVEfixes commits sweep up incidental cleanup
+# (rename/refactor/style) alongside the actual security fix; without
+# something to gate them, the diff hunks from those commits become
+# structural noise in the labelled set. We require at least one security
+# keyword to appear and reject commits whose message is dominated by pure
+# refactor/cleanup language.
+_COMMIT_INCLUDE = (
+    "secur",
+    "vuln",
+    "cve-",
+    "cve ",
+    "exploit",
+    "overflow",
+    "underflow",
+    "inject",
+    "xss",
+    "csrf",
+    "rce",
+    "ssrf",
+    "traversal",
+    "deserial",
+    "escape",
+    "bypass",
+    "auth",
+    "crash",
+    "leak",
+    "uaf",
+    "use-after-free",
+    "double free",
+    "double-free",
+    "race",
+    "tocttou",
+    "oob",
+    "out-of-bounds",
+    "out of bounds",
+    "memory corrupt",
+    "null deref",
+    "null pointer",
+    "buffer ",
+    "format string",
+    "denial of service",
+    "dos",
+    "sanitiz",
+    "validate",
+    "validation",
+    "fix",
+)
+
+_COMMIT_EXCLUDE = (
+    "refactor",
+    "rename",
+    "cleanup",
+    "clean up",
+    "lint",
+    "format",
+    "formatting",
+    "typo",
+    "whitespace",
+    "comment",
+    "docs only",
+    "doc only",
+    "doc:",
+    "docs:",
+    "test only",
+    "tests only",
+    "wip",
+    "merge branch",
+    "merge pull",
+    "version bump",
+    "bump version",
+    "release ",
+)
+
+
+def _should_skip_commit(msg: str | None) -> bool:
+    """Drop pairs whose commit message looks like cleanup, not a fix.
+
+    Returns True if the message lacks any security-ish keyword OR is
+    dominated by refactor/cleanup language. A None/empty message is kept
+    (we have no signal to reject on)."""
+    if not msg:
+        return False
+    low = msg.lower()
+    if any(kw in low for kw in _COMMIT_EXCLUDE):
+        return True
+    return not any(kw in low for kw in _COMMIT_INCLUDE)
+
+
+_NOISE_RE = (
+    # whitespace-only / blank lines
+    "^\\s*$",
+    # one-line block & line comments — covers C/C++/Java/JS/TS/Go/Rust/Ruby
+    "^\\s*//",
+    "^\\s*/\\*",
+    "^\\s*\\*",
+    "^\\s*#",
+    "^\\s*--",
+)
+
+
+_TRIVIAL_INIT_RE = (
+    # `<lhs> = 0/0L/0u/0.0/'\0'/NULL/nullptr/None/nil/null/true/false;`
+    # — covers C/C++/Java/JS/TS/Go/Rust/Python/Ruby. Constant scalar
+    # initialisations carry no security signal but get pulled into diff
+    # hunks (e.g. a counter reset alongside the actual fix).
+    r"^\s*[\w\.\[\]\->]+\s*=\s*"
+    r"(?:0[uUlL]*|0\.0[fFdD]?|0x0+|'\\0'|NULL|nullptr|None|nil|null|true|false)\s*;?\s*$",
+    # `<type> <name> = 0/NULL/...;` — declaration with constant init.
+    r"^\s*(?:unsigned|signed|static|const|extern|register|auto|volatile|mut|let|var|val)?\s*"
+    r"(?:int|char|long|short|float|double|bool|size_t|ssize_t|u?int\d*_t|byte|word|"
+    r"void\s*\*|[A-Z]\w*\s*\*?)\s+[\w\[\]]+\s*=\s*"
+    r"(?:0[uUlL]*|0\.0[fFdD]?|0x0+|'\\0'|NULL|nullptr|None|nil|null|true|false)\s*;?\s*$",
+)
+
+
+# Pure jumps and constant-only returns. These appear in diff hunks all the
+# time (re-ordered error paths, renamed variables, status-flag plumbing)
+# but the security signal lives in the call/assignment that produces the
+# value, not in the jump statement itself. Returns that *contain* a
+# function call (parentheses) or operator/string literal are kept — those
+# may be the sink site itself (e.g. `return execute(req)`).
+_TRIVIAL_FLOW_RE = (
+    # bare jumps — C/C++/Java/JS/TS/Go/Rust (`break;`, `continue;`)
+    r"^\s*(?:break|continue|pass)\s*;?\s*$",
+    # labelled jumps — `goto out;` / `goto err_unlock;` (C/C++)
+    r"^\s*goto\s+\w+\s*;?\s*$",
+    # bare return — `return;` / `return` (Python/Ruby/Rust)
+    r"^\s*return\s*;?\s*$",
+    # return with simple identifier(s) / dotted or arrow access / index
+    # — no call (no parens), no operator beyond `->` / `.`, no string.
+    # Covers `return x;`, `return self.err`, `return ptr->next;`,
+    # `return res, nil` (Go multi-return), `return -1;`.
+    r"^\s*return\s+-?[\w\.\[\]>\-]+(?:\s*,\s*-?[\w\.\[\]>\-]+)*\s*;?\s*$",
+)
+
+
+def _is_noise(line_text: str) -> bool:
+    """True for diff lines that almost certainly carry no security signal:
+    blank lines, comment-only lines, brace-only lines, trivial constant
+    initialisations (`x = 0;`, `unsigned int n = 0;`), and pure control
+    flow (`break;`, `goto out;`, `return res;`)."""
+    import re as _re
+
+    text = line_text or ""
+    if any(_re.match(p, text) for p in _NOISE_RE):
+        return True
+    stripped = text.strip()
+    if stripped in {"", "{", "}", "};", "});", "})", "(", ")", "[]", "[", "]"}:
+        return True
+    if any(_re.match(p, text) for p in _TRIVIAL_INIT_RE):
+        return True
+    return any(_re.match(p, text) for p in _TRIVIAL_FLOW_RE)
+
+
 def _to_method_ranges(
-    diff_lines: list, method_start: int, method_end: int, gap: int
+    diff_lines: list,
+    method_start: int,
+    method_end: int,
+    gap: int,
+    drop_noise: bool,
 ) -> list[tuple[int, int]]:
     """Project file-relative diff line numbers onto method-relative
     coordinates and cluster into ranges. Lines outside the method are
-    dropped."""
+    dropped. When `drop_noise` is set, blank/comment/brace-only lines are
+    skipped before clustering so trivial whitespace patches don't generate
+    findings."""
     nums: list[int] = []
     for entry in diff_lines:
         if not isinstance(entry, (list, tuple)) or not entry:
@@ -137,14 +345,58 @@ def _to_method_ranges(
             ln = int(entry[0])
         except (TypeError, ValueError):
             continue
-        if method_start <= ln <= method_end:
-            nums.append(ln - method_start + 1)
+        if not (method_start <= ln <= method_end):
+            continue
+        if drop_noise and len(entry) > 1 and _is_noise(str(entry[1])):
+            continue
+        nums.append(ln - method_start + 1)
     return _cluster(nums, gap=gap)
 
 
 def _expand(rng: tuple[int, int], total_lines: int, padding: int) -> tuple[int, int]:
     lo, hi = rng
     return max(1, lo - padding), min(total_lines, hi + padding)
+
+
+def _window_extract(
+    code: str, ranges: list[tuple[int, int]], window: int
+) -> tuple[str, list[tuple[int, int]]]:
+    """Slice `code` down to the union of (range ± window) and return the
+    sliced text plus ranges remapped onto its 1-indexed line numbers.
+    Adjacent or overlapping windows are merged."""
+    if not ranges or window <= 0:
+        return code, ranges
+    lines = code.splitlines()
+    total = len(lines)
+    # Build merged windows on the original coords.
+    raw = sorted((max(1, lo - window), min(total, hi + window)) for lo, hi in ranges)
+    merged: list[tuple[int, int]] = []
+    for lo, hi in raw:
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+
+    # Concatenate the windowed slices, joined by a 2-line gutter so the
+    # encoder sees that they're separate regions. Track new line offsets.
+    out_lines: list[str] = []
+    remap: list[tuple[int, int, int]] = []  # (orig_lo, orig_hi, new_offset)
+    for lo, hi in merged:
+        if out_lines:
+            out_lines.append("")
+            out_lines.append("// ────────────")
+        new_offset = len(out_lines) + 1  # 1-indexed line number for `lo`
+        remap.append((lo, hi, new_offset - lo))
+        out_lines.extend(lines[lo - 1 : hi])
+
+    new_ranges: list[tuple[int, int]] = []
+    for orig_lo, orig_hi in ranges:
+        # Find which merged window contains this range, apply its shift.
+        for win_lo, win_hi, shift in remap:
+            if orig_lo >= win_lo and orig_hi <= win_hi:
+                new_ranges.append((orig_lo + shift, orig_hi + shift))
+                break
+    return "\n".join(out_lines), new_ranges
 
 
 def _emit(
@@ -219,6 +471,38 @@ def main() -> int:
         default=0,
         help="stop after N pairs (each pair emits up to 2 records); 0 = all",
     )
+    ap.add_argument(
+        "--window",
+        type=int,
+        default=0,
+        help="when > 0, replace `code` with just (changed-lines ± window). "
+        "Tightens the focus of the embedding so it isn't dominated by "
+        "shared context lines that don't differ between TP and FP.",
+    )
+    ap.add_argument(
+        "--drop-noise",
+        action="store_true",
+        help="skip diff lines that are blank, comment-only, or pure brace "
+        "tokens — they carry no security signal and pollute the dataset.",
+    )
+    ap.add_argument(
+        "--max-ranges",
+        type=int,
+        default=3,
+        help="drop the entire pair if either side has more than N ranges. "
+        "Large per-side range counts almost always indicate a sweeping "
+        "refactor/cleanup commit rather than a focused security fix and "
+        "produce noisy labels.",
+    )
+    ap.add_argument(
+        "--cross-cve-fp-ratio",
+        type=float,
+        default=0.0,
+        help="emit additional FP samples by pairing each TP with a random "
+        "patched method from a *different* CVE. Helps the model avoid "
+        "overfitting to within-pair fix patterns. 0.0 disables, 1.0 "
+        "doubles the FP volume.",
+    )
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -241,8 +525,25 @@ def main() -> int:
     sql = SQL.format(langs=lang_sql)
 
     seen: set[str] = set()
-    counters = {"tp": 0, "fp": 0, "dedup": 0, "no_range": 0, "lang": 0, "parse": 0}
+    counters = {
+        "tp": 0,
+        "fp": 0,
+        "dedup": 0,
+        "no_range": 0,
+        "lang": 0,
+        "parse": 0,
+        "filename": 0,
+        "commit_msg": 0,
+        "max_ranges": 0,
+    }
     pairs_seen = 0
+    # Cross-CVE FP pool — every patched method we've seen, keyed by CVE so
+    # we can sample one whose CVE differs from the current TP.
+    import random as _random
+
+    rng_pool = _random.Random(20260426)
+    cross_pool: list[tuple[str, str, str, list[tuple[int, int]]]] = []
+    # tuples: (cve, lang_tag, patched_code, fp_ranges_method_relative)
 
     with args.out.open("w", encoding="utf-8") as fh:
         cur = conn.execute(
@@ -260,10 +561,19 @@ def main() -> int:
             filename,
             cwe,
             cve,
+            commit_msg,
         ) in cur:
             lang_tag = _LANG_MAP.get(lang)
             if not lang_tag:
                 counters["lang"] += 1
+                continue
+
+            if _should_skip_file(filename):
+                counters["filename"] += 1
+                continue
+
+            if _should_skip_commit(commit_msg):
+                counters["commit_msg"] += 1
                 continue
 
             try:
@@ -278,20 +588,45 @@ def main() -> int:
                 counters["parse"] += 1
                 continue
 
-            tp_ranges = _to_method_ranges(parsed.get("deleted") or [], vs, ve, args.gap)
-            fp_ranges = _to_method_ranges(parsed.get("added") or [], ps, pe, args.gap)
+            tp_ranges = _to_method_ranges(
+                parsed.get("deleted") or [], vs, ve, args.gap, args.drop_noise
+            )
+            fp_ranges = _to_method_ranges(
+                parsed.get("added") or [], ps, pe, args.gap, args.drop_noise
+            )
 
             if not tp_ranges and not fp_ranges:
                 counters["no_range"] += 1
                 continue
 
+            # Sweeping commits with many disjoint hunks per side rarely
+            # represent a single focused vulnerability — drop the whole
+            # pair so we don't pollute the labelled set with structural
+            # noise from refactors.
+            if args.max_ranges > 0 and (
+                len(tp_ranges) > args.max_ranges or len(fp_ranges) > args.max_ranges
+            ):
+                counters["max_ranges"] += 1
+                continue
+
+            # Apply window extraction independently per side.
+            tp_code_out, tp_ranges_out = _window_extract(
+                vuln_code, tp_ranges, args.window
+            )
+            fp_code_out, fp_ranges_out = _window_extract(
+                patched_code, fp_ranges, args.window
+            )
+
+            if fp_ranges:
+                cross_pool.append((cve or "", lang_tag, fp_code_out, fp_ranges_out))
+
             wrote_any = False
             if tp_ranges:
                 wrote_any |= _emit(
                     fh,
-                    vuln_code,
+                    tp_code_out,
                     "tp",
-                    tp_ranges,
+                    tp_ranges_out,
                     lang_tag,
                     cve,
                     cwe,
@@ -300,12 +635,39 @@ def main() -> int:
                     counters,
                     args.padding,
                 )
+
+                # Cross-CVE FP: pair this TP with a random patched method
+                # from a different CVE so the model also learns "looks
+                # like a fix from anywhere = not vulnerable", not just
+                # "looks like the paired fix".
+                if args.cross_cve_fp_ratio > 0 and cross_pool:
+                    if rng_pool.random() < args.cross_cve_fp_ratio:
+                        attempts = 0
+                        while attempts < 5:
+                            cand = rng_pool.choice(cross_pool)
+                            if cand[0] != (cve or "") and cand[1] == lang_tag:
+                                _emit(
+                                    fh,
+                                    cand[2],
+                                    "fp",
+                                    cand[3],
+                                    lang_tag,
+                                    f"{cve}::cross::{cand[0]}",
+                                    None,
+                                    filename,
+                                    seen,
+                                    counters,
+                                    args.padding,
+                                )
+                                break
+                            attempts += 1
+
             if fp_ranges:
                 wrote_any |= _emit(
                     fh,
-                    patched_code,
+                    fp_code_out,
                     "fp",
-                    fp_ranges,
+                    fp_ranges_out,
                     lang_tag,
                     cve,
                     cwe,
@@ -326,7 +688,10 @@ def main() -> int:
     print(
         f"wrote {total} samples ({counters['tp']} TP + {counters['fp']} FP) "
         f"from {pairs_seen} pairs → {args.out}\n"
-        f"  skipped: {counters['no_range']} (no in-range edits), "
+        f"  skipped: {counters['filename']} (test/doc filename), "
+        f"{counters['commit_msg']} (commit msg), "
+        f"{counters['max_ranges']} (>max-ranges), "
+        f"{counters['no_range']} (no in-range edits), "
         f"{counters['dedup']} (dup), {counters['lang']} (lang), "
         f"{counters['parse']} (parse)"
     )

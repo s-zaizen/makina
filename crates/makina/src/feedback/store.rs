@@ -69,9 +69,12 @@ pub fn init_db() -> Result<()> {
             confidence REAL NOT NULL,
             label TEXT CHECK(label IN ('tp','fp')),
             labeled_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            group_key TEXT
         );",
     )?;
+    // Idempotent ALTER for upgrades from earlier schemas without group_key.
+    let _ = feedback_conn.execute("ALTER TABLE findings ADD COLUMN group_key TEXT", []);
 
     // ── verify.db ───────────────────────────────────────────────────────────────
     let verify_conn = open_verify()?;
@@ -197,6 +200,7 @@ fn migrate_legacy(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn save_finding(
     id: &str,
     code_hash: &str,
@@ -205,13 +209,23 @@ pub fn save_finding(
     line_number: u32,
     confidence: f32,
     embedding: Option<&[u8]>,
+    group_key: Option<&str>,
 ) -> Result<()> {
     let conn = open_feedback()?;
     conn.execute(
         "INSERT OR IGNORE INTO findings
-         (id, code_hash, rule_id, language, line_number, confidence, feature_vector)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, code_hash, rule_id, language, line_number, confidence, embedding],
+         (id, code_hash, rule_id, language, line_number, confidence, feature_vector, group_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            id,
+            code_hash,
+            rule_id,
+            language,
+            line_number,
+            confidence,
+            embedding,
+            group_key
+        ],
     )?;
     Ok(())
 }

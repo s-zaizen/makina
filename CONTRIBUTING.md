@@ -37,7 +37,30 @@ inside the `ml` container so it shares the cached CodeBERT weights.
 #    time so the GBDT trains on per-finding embeddings — full method
 #    as context, narrow line range as the focus, with hard
 #    counterexamples coming from the actual fix.
-python ml/scripts/converters/cvefixes.py
+#
+#    Recommended flags:
+#      --window 6              tighten code to (changed lines ± 6) so the
+#                              embedding focuses on the diff hunk
+#      --drop-noise            skip diff lines that are blank, comment-only,
+#                              brace-only, trivial constant inits (`x = 0;`),
+#                              or pure control flow (`return x;`, `goto out;`)
+#      --max-ranges 3          drop the entire CVE pair if either side has
+#                              more than 3 disjoint hunks — sweeping commits
+#                              are almost never focused security fixes
+#      --cross-cve-fp-ratio 0.5 also pair each TP with a random patched
+#                              method from a *different* CVE (helps the
+#                              model not overfit to within-pair fix patterns)
+#
+#    The converter also enforces two pair-level filters with no flag:
+#      * commit-message filter — requires a security keyword (vuln/cve/
+#        overflow/inject/escape/bypass/…) in the commit subject and
+#        rejects pure refactor/rename/cleanup/typo/merge/version-bump
+#        commits, since CVEfixes labels every method touched in the
+#        security commit regardless of intent
+#      * filename filter — drops paths under /test/, /docs/, fixtures,
+#        CHANGELOG, *.md, etc.
+python ml/scripts/converters/cvefixes.py \
+  --window 6 --drop-noise --max-ranges 3 --cross-cve-fp-ratio 0.5
 
 # 2. Convert CVEfixes → diff-aware hunk pairs (for pair-feature experiments)
 python ml/scripts/converters/cvefixes_pairs.py
@@ -49,8 +72,11 @@ docker compose exec ml rm -f \
 docker compose restart backend ml
 
 # 4. Bulk-import. Each case becomes a verify-queue entry with the full
-#    method as `code` and one manual finding per range; all findings
-#    are submitted as TRUE POSITIVE. --count 0 ingests every record.
+#    method as `code` and one manual finding per range; findings carry
+#    the per-record TP/FP label and the case's CVE id is sent as
+#    `group_key` so the GBDT trainer's GroupShuffleSplit keeps every
+#    paired TP/FP twin on the same side of the train/val split.
+#    --count 0 ingests every record.
 python ml/scripts/bulk_import.py \
   --jsonl third_party/datasets/cvefixes/samples.jsonl \
   --count 0

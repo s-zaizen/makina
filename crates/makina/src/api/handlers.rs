@@ -375,7 +375,9 @@ pub async fn scan(
             }
         }
 
-        let _ = store::save_finding(&r.finding.id, &code_hash, &r.finding.rule_id, lang_str, r.finding.line_start, r.finding.confidence, emb);
+        // Live scans don't carry an explicit group_key; the GBDT trainer
+        // falls back to a stratified random split for these rows.
+        let _ = store::save_finding(&r.finding.id, &code_hash, &r.finding.rule_id, lang_str, r.finding.line_start, r.finding.confidence, emb, None);
         findings.push(r.finding);
     }
 
@@ -461,6 +463,7 @@ pub async fn manual_finding(
     let _ = store::save_finding(
         &finding.id, &code_hash, &finding.rule_id, lang_str,
         finding.line_start, finding.confidence, emb,
+        req.group_key.as_deref(),
     );
 
     info!(finding_id = %finding.id, rule = %finding.rule_id, "manual finding added");

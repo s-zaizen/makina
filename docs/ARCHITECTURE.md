@@ -162,12 +162,44 @@ lines that did not change. Pairing each vulnerable method with its own
 patched counterpart gives the GBDT a hard, semantically-meaningful
 counterexample for every CVE.
 
+Quality filters applied during conversion:
+
+- **filename filter** — files matching `/test*/`, `_test.`, `/docs/`,
+  `CHANGELOG`, `*.md`, etc. are dropped. Tests touched by a CVE-fix
+  commit are not vulnerabilities; they only verify the fix.
+- **commit-message filter** — the conversion JOINs `commits.msg` and
+  drops pairs whose commit subject lacks any security keyword (`vuln`,
+  `cve`, `overflow`, `inject`, `escape`, `bypass`, `auth`, `leak`, …)
+  or is dominated by refactor/rename/cleanup/typo/merge/version-bump
+  language. CVEfixes labels every method touched in the security
+  commit, including incidental cleanup; without this the corpus is
+  full of label noise from sweeping commits.
+- **`--window N`** — instead of the whole method, slice the code down
+  to `(changed lines ± N)`. Tightens the embedding's focus so it
+  isn't dominated by shared context lines that don't differ between
+  the TP and FP sides.
+- **`--drop-noise`** — skip diff lines that carry no security signal:
+  blank, comment-only, brace-only, trivial constant initialisations
+  (`x = 0;`, `unsigned int n = 0;`), and pure control flow (`return
+  res;`, `goto out;`, `break;`). Returns that contain a function call
+  (`return execute(req);`) are kept — the call may be the sink site.
+- **`--max-ranges N`** — drop the entire CVE pair if either side has
+  more than N disjoint hunks (default 3). Sweeping commits with many
+  scattered edits are almost always refactors masquerading as
+  security fixes and produce noisy labels.
+- **`--cross-cve-fp-ratio R`** — additionally pair each TP with a
+  random patched method from a *different* CVE so the model learns
+  "looks like a fix from anywhere = not vulnerable" rather than just
+  "looks like the paired fix".
+
 `bulk_import.py` plays each record back as a Verify Submit:
 
 1. For every range, `POST /api/findings/manual` with the full method as
    `code` and the range as `(line_start, line_end)`. The backend embeds
    the snippet via `/embed_with_graph` so the resulting feature vector
-   sees the same call-graph context the live scanner would use.
+   sees the same call-graph context the live scanner would use. The
+   request also carries `group_key=<cve_id>` which the backend stores
+   on the finding row.
 2. `POST /api/verify/queue` bundles all findings under one case keyed
    by the CVE id.
 3. `POST /api/knowledge?skip_train=true` archives the case with every
@@ -178,6 +210,13 @@ After the batch, a single `POST /api/retrain` brings the GBDT up to
 date. This avoids a retrain stampede and keeps the training
 distribution aligned with what the model sees at inference (per-finding
 embeddings rather than whole-method labels).
+
+The trainer reads `group_key` and uses sklearn's `GroupShuffleSplit`
+when at least two distinct groups are present, so a paired TP/FP twin
+never straddles the 80/20 train/val boundary — random `train_test_split`
+would leak the answer into validation when the same CVE's vulnerable
+and patched methods land on opposite sides. Live-scan rows have no
+group key and fall back to the previous stratified split.
 
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.

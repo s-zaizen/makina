@@ -94,6 +94,11 @@ pub struct ManualFindingRequest {
     pub severity: String,
     pub cwe: Option<String>,
     pub message: String,
+    /// Opaque grouping key (e.g. CVE id) used by the GBDT trainer to keep
+    /// related samples together when splitting train/val. Optional so the
+    /// regular Verify-Submit flow keeps working without it.
+    #[serde(default)]
+    pub group_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

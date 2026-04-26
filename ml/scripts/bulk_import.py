@@ -187,6 +187,9 @@ def post_manual_finding(
             if sample.cwe
             else "patched region (CVEfixes)"
         )
+    # group_key keeps every TP/FP record from the same CVE together so the
+    # GBDT trainer's GroupShuffleSplit doesn't leak the patched twin into
+    # validation while training on its vulnerable sibling.
     r = client.post(
         f"{API}/api/findings/manual",
         headers={"x-request-id": req_id},
@@ -198,6 +201,7 @@ def post_manual_finding(
             "severity": sample.severity,
             "cwe": sample.cwe,
             "message": message,
+            "group_key": sample.cve_id,
         },
         timeout=120.0,
     )

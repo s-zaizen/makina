@@ -75,20 +75,25 @@ embedder.ensure_loaded()
 
 # ---------- helpers ----------------------------------------------------------
 
+
 def _db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def _label_count() -> dict:
     if not DB_PATH.exists():
         return {"total": 0, "tp": 0, "fp": 0}
     conn = _db()
-    total = conn.execute("SELECT COUNT(*) FROM findings WHERE label IS NOT NULL").fetchone()[0]
-    tp    = conn.execute("SELECT COUNT(*) FROM findings WHERE label = 'tp'").fetchone()[0]
-    fp    = conn.execute("SELECT COUNT(*) FROM findings WHERE label = 'fp'").fetchone()[0]
+    total = conn.execute(
+        "SELECT COUNT(*) FROM findings WHERE label IS NOT NULL"
+    ).fetchone()[0]
+    tp = conn.execute("SELECT COUNT(*) FROM findings WHERE label = 'tp'").fetchone()[0]
+    fp = conn.execute("SELECT COUNT(*) FROM findings WHERE label = 'fp'").fetchone()[0]
     conn.close()
     return {"total": total, "tp": tp, "fp": fp}
+
 
 def _model_stage(total: int) -> str:
     """Maturity indicator — not a capability gate.
@@ -101,40 +106,47 @@ def _model_stage(total: int) -> str:
         return "refining"
     return "mature"
 
+
 def _load_model():
     """Load XGBoost model if available, else return None."""
     if not MODEL_PATH.exists():
         return None
     try:
         import xgboost as xgb
+
         m = xgb.XGBClassifier()
         m.load_model(str(MODEL_PATH))
         return m
     except Exception:
         return None
 
+
 # ---------- endpoints --------------------------------------------------------
+
 
 @app.get("/health")
 def health():
     return {"ok": True}
+
 
 @app.get("/status")
 def status():
     counts = _label_count()
     return {
         "total_labels": counts["total"],
-        "tp_count":     counts["tp"],
-        "fp_count":     counts["fp"],
-        "model_stage":  _model_stage(counts["total"]),
-        "model_ready":  MODEL_PATH.exists(),
+        "tp_count": counts["tp"],
+        "fp_count": counts["fp"],
+        "model_stage": _model_stage(counts["total"]),
+        "model_ready": MODEL_PATH.exists(),
         "labels_until_next_stage": 0,
         "embedding_model_status": embedder.status(),
         "embedding_model_ready": embedder.is_ready(),
     }
 
+
 class TrainRequest(BaseModel):
     pass  # no minimum — train whenever both classes are present
+
 
 @app.post("/train")
 def train(req: TrainRequest):
@@ -149,18 +161,36 @@ def train(req: TrainRequest):
         return {"ok": False, "reason": "no database yet", "samples": 0}
 
     conn = _db()
-    rows = conn.execute(
-        "SELECT feature_vector, label FROM findings "
-        "WHERE label IS NOT NULL AND feature_vector IS NOT NULL"
-    ).fetchall()
+    # `group_key` was added in a later schema; older DBs may lack the column
+    # so we read it via a NULL-tolerant subquery and fall back gracefully.
+    has_group_col = (
+        conn.execute(
+            "SELECT 1 FROM pragma_table_info('findings') WHERE name='group_key'"
+        ).fetchone()
+        is not None
+    )
+    if has_group_col:
+        rows = conn.execute(
+            "SELECT feature_vector, label, group_key FROM findings "
+            "WHERE label IS NOT NULL AND feature_vector IS NOT NULL"
+        ).fetchall()
+    else:
+        rows = [
+            (fv, lbl, None)
+            for fv, lbl in conn.execute(
+                "SELECT feature_vector, label FROM findings "
+                "WHERE label IS NOT NULL AND feature_vector IS NOT NULL"
+            ).fetchall()
+        ]
     conn.close()
 
-    X, y = [], []
-    for fv_bytes, label in rows:
-        fv = np.frombuffer(fv_bytes, dtype='<f4')
+    X, y, groups = [], [], []
+    for fv_bytes, label, group_key in rows:
+        fv = np.frombuffer(fv_bytes, dtype="<f4")
         if len(fv) == 768:
             X.append(fv)
             y.append(1 if label == "tp" else 0)
+            groups.append(group_key)
 
     if len(set(y)) < 2:
         logger.info(
@@ -173,20 +203,46 @@ def train(req: TrainRequest):
     tp_count = int(y_arr.sum())
     fp_count = int(len(y_arr) - tp_count)
 
-    # Train/val split — stratified 80/20 when we have enough samples; otherwise
-    # train on everything and skip validation metrics.
+    # CVE-aware grouping: every sample produced by bulk_import carries its
+    # CVE id as group_key, so a paired TP/FP twin never straddles the
+    # train/val split. Live-scan rows have group_key=NULL — we fill those
+    # with unique synthetic ids so they each form a singleton group and
+    # behave the same as random samples.
+    use_group_split = (
+        any(g is not None for g in groups) and len({g for g in groups if g}) >= 2
+    )
+    if use_group_split:
+        groups_arr = np.array(
+            [g if g is not None else f"_solo_{i}" for i, g in enumerate(groups)]
+        )
+
+    # Train/val split — group-aware when we have CVE keys, stratified 80/20
+    # otherwise. Either way needs ≥ 5 of each class to be meaningful.
     val_metrics: dict | None = None
     can_split = min(tp_count, fp_count) >= 5
     t0 = time.perf_counter()
-    if can_split:
+    if can_split and use_group_split:
+        from sklearn.model_selection import GroupShuffleSplit
+
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+        train_idx, val_idx = next(gss.split(X_arr, y_arr, groups=groups_arr))
+        X_train, X_val = X_arr[train_idx], X_arr[val_idx]
+        y_train, y_val = y_arr[train_idx], y_arr[val_idx]
+    elif can_split:
         from sklearn.model_selection import train_test_split
+
         X_train, X_val, y_train, y_val = train_test_split(
             X_arr, y_arr, test_size=0.2, random_state=42, stratify=y_arr
         )
+    if can_split:
         model = xgb.XGBClassifier(
-            n_estimators=100, max_depth=4, learning_rate=0.1,
-            subsample=0.8, colsample_bytree=0.8,
-            eval_metric="logloss", random_state=42,
+            n_estimators=100,
+            max_depth=4,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="logloss",
+            random_state=42,
         )
         model.fit(X_train, y_train)
         # Eval on the held-out split
@@ -208,18 +264,24 @@ def train(req: TrainRequest):
             "val_precision": round(precision, 4),
             "val_recall": round(recall, 4),
             "val_prob_mean_tp": round(float(val_prob[y_val == 1].mean()), 4)
-                                if (y_val == 1).any() else None,
+            if (y_val == 1).any()
+            else None,
             "val_prob_mean_fp": round(float(val_prob[y_val == 0].mean()), 4)
-                                if (y_val == 0).any() else None,
+            if (y_val == 0).any()
+            else None,
         }
         # After reporting, retrain on the full dataset so the production model
         # uses every label available.
         model.fit(X_arr, y_arr)
     else:
         model = xgb.XGBClassifier(
-            n_estimators=100, max_depth=4, learning_rate=0.1,
-            subsample=0.8, colsample_bytree=0.8,
-            eval_metric="logloss", random_state=42,
+            n_estimators=100,
+            max_depth=4,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="logloss",
+            random_state=42,
         )
         model.fit(X_arr, y_arr)
 
@@ -228,6 +290,7 @@ def train(req: TrainRequest):
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     from datetime import datetime, timezone
+
     metrics = {
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "samples": len(X),
@@ -235,7 +298,13 @@ def train(req: TrainRequest):
         "fp": fp_count,
         "stage": _model_stage(len(X)),
         "elapsed_ms": elapsed_ms,
-        "split": "80/20 stratified" if can_split else "no split (insufficient per-class samples)",
+        "split": (
+            "80/20 group (CVE-aware)"
+            if (can_split and use_group_split)
+            else "80/20 stratified"
+            if can_split
+            else "no split (insufficient per-class samples)"
+        ),
         **(val_metrics or {}),
     }
     try:
@@ -250,7 +319,12 @@ def train(req: TrainRequest):
     # the next /analyze call picks up the retrained artifacts.
     analyzer.reset_index()
 
-    return {"ok": True, "samples": len(X), "model_path": str(MODEL_PATH), **(val_metrics or {})}
+    return {
+        "ok": True,
+        "samples": len(X),
+        "model_path": str(MODEL_PATH),
+        **(val_metrics or {}),
+    }
 
 
 @app.get("/metrics")
@@ -264,6 +338,7 @@ def get_metrics():
     except Exception as e:
         logger.warning("failed to read metrics: %s", e)
         return {"metrics": None}
+
 
 EMBEDDING_DIM = 768
 
@@ -317,24 +392,30 @@ def predict_batch(req: PredictBatchRequest):
         "model_ready": True,
     }
 
+
 class AnalyzeRequest(BaseModel):
     code: str
     language: Optional[str] = None
+
 
 @app.post("/analyze")
 def analyze_code(req: AnalyzeRequest):
     return analyzer.analyze(req.code, req.language)
 
+
 class SemgrepRequest(BaseModel):
     code: str
     language: Optional[str] = None
+
 
 @app.post("/semgrep")
 def semgrep_scan(req: SemgrepRequest):
     return semgrep_scanner.scan(req.code, req.language or "auto")
 
+
 class EmbedBatchRequest(BaseModel):
     snippets: list[str]
+
 
 @app.post("/embed_batch")
 def embed_batch(req: EmbedBatchRequest):
@@ -345,23 +426,28 @@ def embed_batch(req: EmbedBatchRequest):
         return {"embeddings": []}
     return {"embeddings": embs.tolist()}
 
+
 class TaintRequest(BaseModel):
     code: str
     language: Optional[str] = None
+
 
 @app.post("/taint")
 def taint_scan(req: TaintRequest):
     from . import taint_engine
     from .semgrep_scanner import _detect_language
+
     language = req.language or "auto"
     if language in ("auto", "unknown", "", None):
         language = _detect_language(req.code)
     return taint_engine.analyze(req.code, language)
 
+
 class EmbedWithGraphRequest(BaseModel):
     code: str
     language: str
     line_starts: list[int]
+
 
 @app.post("/embed_with_graph")
 def embed_with_graph(req: EmbedWithGraphRequest):
@@ -382,7 +468,9 @@ def embed_with_graph(req: EmbedWithGraphRequest):
     snippets = []
     for line in req.line_starts:
         if functions:
-            context = build_augmented_context(functions, req.code, line, line, max_depth=1)
+            context = build_augmented_context(
+                functions, req.code, line, line, max_depth=1
+            )
         else:
             ctx_s = max(0, line - 4)
             ctx_e = min(len(lines), line + 3)
@@ -393,6 +481,7 @@ def embed_with_graph(req: EmbedWithGraphRequest):
     if embs is None:
         return {"embeddings": []}
     return {"embeddings": embs.tolist()}
+
 
 # ---------- entry point -------------------------------------------------------
 
