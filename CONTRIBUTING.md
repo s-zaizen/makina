@@ -81,12 +81,56 @@ python ml/scripts/bulk_import.py \
   --jsonl third_party/datasets/cvefixes/samples.jsonl \
   --count 0
 
+# 4b. Offline trainer (no API, ~10–20× faster) — for prod model bake.
+#     Embeds locally in batches and trains directly via
+#     services.training.train_from_arrays. Skips SQLite + HTTP entirely;
+#     the model.json it produces is byte-compatible with the route-
+#     trained one. Run inside the ml container so heavy deps are
+#     available.
+docker cp third_party/datasets/cvefixes/samples.jsonl makina-ml-1:/tmp/
+docker compose exec -T ml python3 /ml/scripts/train_offline.py \
+  --jsonl /tmp/samples.jsonl \
+  --model-path /tmp/model.json \
+  --metrics-path /tmp/metrics.json \
+  --batch-size 32
+
 # 5. Pair-feature ablation suite (research, runs inside the ml container)
 docker cp third_party/datasets/cvefixes/samples_pairs.jsonl makina-ml-1:/tmp/
 docker cp ml/scripts/run_ablations.py makina-ml-1:/ml/scripts/
 docker compose exec -T ml python3 /ml/scripts/run_ablations.py \
   --pairs /tmp/samples_pairs.jsonl
 ```
+
+## Shipping a Frozen Model to Production
+
+The public Cloud Run deployment runs in `MAKINA_PUBLIC_MODE=true`, so
+on-line learning is disabled. To give it a baseline GBDT to blend with
+the heuristic score, train locally with `train_offline.py` and upload
+the resulting `model.json` to the dedicated GCS bucket:
+
+```bash
+# 1. Train (see above) — produces /tmp/model.json inside the ml container
+docker cp makina-ml-1:/tmp/model.json /tmp/model.json
+docker cp makina-ml-1:/tmp/metrics.json /tmp/metrics.json
+
+# 2. Upload to GCS — Cloud Run's entrypoint downloads from this bucket
+gcloud storage cp /tmp/model.json gs://makina-prod-models/model.json
+gcloud storage cp /tmp/metrics.json gs://makina-prod-models/metrics.json
+
+# 3. Roll a Cloud Run revision so the new model is picked up at boot
+gcloud run services update makina-api --region=asia-northeast1 \
+    --update-env-vars MAKINA_MODEL_VERSION=$(date +%Y%m%d)
+```
+
+The `MAKINA_MODEL_VERSION` env-var bump is just a no-op annotation that
+forces Cloud Run to roll a new revision. The container's entrypoint
+calls `google-cloud-storage` against the bucket using Application
+Default Credentials (the runtime compute SA has `roles/storage.objectViewer`
+granted as part of one-time setup).
+
+`model.json` itself is **not committed to git** — it's a build-derived
+artefact that lives in the GCS bucket. Re-train locally and re-upload
+to swap in a new model.
 
 ## Project Layout
 

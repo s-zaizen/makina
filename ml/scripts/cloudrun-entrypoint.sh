@@ -17,6 +17,34 @@ export ML_PORT
 export PORT
 export MAKINA_ML_URL="http://127.0.0.1:${ML_PORT}"
 
+# Pull the frozen GBDT model from Cloud Storage so /api/scan can blend
+# its confidence into the heuristic score. The file is small (~100 KB)
+# so the extra cold-start tax is negligible. We use Application Default
+# Credentials — Cloud Run's compute SA already has objectViewer on the
+# bucket. Failure here is non-fatal: the API still serves heuristic-
+# only findings if the model is missing.
+MAKINA_MODEL_BUCKET="${MAKINA_MODEL_BUCKET:-makina-prod-models}"
+MAKINA_MODEL_OBJECT="${MAKINA_MODEL_OBJECT:-model.json}"
+MODEL_DEST="${MAKINA_MODEL:-/root/.makina/model.json}"
+
+if [ -n "${MAKINA_MODEL_BUCKET}" ] && [ -n "${MAKINA_MODEL_OBJECT}" ]; then
+    echo "[entrypoint] fetching gs://${MAKINA_MODEL_BUCKET}/${MAKINA_MODEL_OBJECT} → ${MODEL_DEST}" >&2
+    mkdir -p "$(dirname "${MODEL_DEST}")"
+    if python3 -c "
+import sys
+from google.cloud import storage
+try:
+    storage.Client().bucket('${MAKINA_MODEL_BUCKET}').blob('${MAKINA_MODEL_OBJECT}').download_to_filename('${MODEL_DEST}')
+except Exception as e:
+    print(f'[entrypoint] model download failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&2; then
+        echo "[entrypoint] model loaded ($(wc -c < "${MODEL_DEST}") bytes)" >&2
+    else
+        echo "[entrypoint] continuing without model (heuristic-only confidence)" >&2
+    fi
+fi
+
 echo "[entrypoint] starting Python ML on 127.0.0.1:${ML_PORT}" >&2
 python -m makina_ml.server &
 ML_PID=$!

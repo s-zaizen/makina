@@ -98,7 +98,8 @@ RUN pip install --no-cache-dir \
     "tree-sitter-languages==1.10.2" \
     "python-json-logger>=2.0.7" \
     "openfeature-sdk>=0.7.0" \
-    "pytest>=8.0.0"
+    "pytest>=8.0.0" \
+    "google-cloud-storage>=2.14.0"
 
 RUN git clone --depth 1 --filter=blob:none --sparse \
         https://github.com/semgrep/semgrep-rules.git /opt/semgrep-rules \

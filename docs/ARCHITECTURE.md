@@ -312,6 +312,36 @@ group key and fall back to the previous stratified split.
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.
 
+### Offline trainer (prod model bake)
+
+`ml/scripts/train_offline.py` mirrors the Verify-Submit codepath but
+skips the HTTP API and SQLite entirely:
+
+```
+samples.jsonl → flatten ranges → call-graph snippets
+              → embedder.embed_batch (batch=32)
+              → services.training.train_from_arrays
+              → model.json + metrics.json
+```
+
+The route-driven `train(db_path, ...)` is now a thin wrapper that
+reads embeddings from `feedback.db` and delegates to
+`train_from_arrays(embeddings, labels, groups, ...)` — both paths
+produce byte-compatible model artefacts.
+
+End-to-end on the v1.0.8 corpus (~14 k samples / ~19 k findings):
+
+| Path                              | Time on CPU | Time on GPU |
+|-----------------------------------|-------------|-------------|
+| `bulk_import.py` (HTTP per finding) | 5–15 hours  | n/a         |
+| `train_offline.py` (in-process, batched) | 25–35 min  | 5–10 min    |
+
+The HTTP-less path is what bakes the production model: train locally,
+upload `model.json` to `gs://makina-prod-models/`, and Cloud Run's
+entrypoint pulls it on container boot (see `CONTRIBUTING.md` →
+*Shipping a Frozen Model to Production*). Public deployments never
+expose `/train`, so this is the only way the prod model gets refreshed.
+
 ## Logging
 
 Both services emit **structured JSON to stdout** (picked up by `docker compose logs`).
