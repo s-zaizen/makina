@@ -1,7 +1,7 @@
 mod api;
-mod feedback;
 mod infra;
 mod logging;
+mod store;
 
 use clap::{Parser, Subcommand};
 use tracing::info;
@@ -38,13 +38,13 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Serve { host, port } => {
-            feedback::store::init_db()?;
+            store::init_db()?;
             info!("makina server starting on http://{}:{}", host, port);
             info!("Frontend: run `npm run dev` in frontend/");
             api::serve(&host, port).await?;
         }
         Commands::Retrain { runpod } => {
-            let stats = feedback::store::get_stats()?;
+            let stats = store::get_stats()?;
             println!(
                 "Labels: {} (TP: {}, FP: {})",
                 stats.total_labels, stats.tp_count, stats.fp_count

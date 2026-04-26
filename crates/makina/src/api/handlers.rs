@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::feedback::store;
+use crate::store;
 use crate::infra::ml::{bytes_to_f32_vec, language_hint, severity_from_str, MlClient};
 use crate::logging::RequestId;
 
