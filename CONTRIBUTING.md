@@ -117,6 +117,29 @@ docs/                Architecture and design documentation
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a full system overview.
+See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the public Cloud Run deployment pipeline.
+
+## Feature Flags
+
+Runtime flags are read once at startup. Today there is one flag,
+`MAKINA_PUBLIC_MODE` (truthy values: `1`, `true`, `yes`, `on`).
+
+| Stack    | Library / mechanism                                     | Source                       |
+|----------|---------------------------------------------------------|------------------------------|
+| Rust     | hand-rolled `crate::flags::Flags` (env-driven)          | `crates/makina/src/flags.rs` |
+| Python   | OpenFeature SDK + `InMemoryProvider` (env-driven)       | `ml/makina_ml/flags.py`      |
+| Frontend | SvelteKit `$env/static/public` (`PUBLIC_MAKINA_PUBLIC_MODE`) | `frontend/src/lib/flags.ts` |
+
+Public mode strips every learning-loop write: `/api/feedback`,
+`/api/findings/manual`, `POST /api/verify/queue`, `DELETE /api/verify/queue/:case_no`,
+`POST /api/knowledge`, `/api/retrain`, and the Python `/train`. The
+frontend hides the Verify and Model tabs.
+
+When the flag set grows beyond a couple of toggles, swap the Python
+in-memory provider for a remote OpenFeature provider (Flipt, Unleash,
+GrowthBook) and migrate Rust to the OpenFeature Rust SDK once it
+stabilises. The current shape leaves that migration as a single-file
+edit per stack.
 
 ## Commit Convention
 

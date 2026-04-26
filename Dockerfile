@@ -121,3 +121,30 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
     CMD curl -sf http://localhost:8080/health || exit 1
 
 CMD ["python", "-m", "makina_ml.server"]
+
+# ════════════════════════════════════════════════════════════════════════════
+# cloudrun — single image hosting both Rust API and Python ML for Cloud Run.
+# Cold-starts once, communicates over loopback, exposes only the Rust port.
+# Build with: docker build --target cloudrun -t makina-cloudrun .
+# ════════════════════════════════════════════════════════════════════════════
+
+FROM ml AS cloudrun
+
+# Bring the Rust binary into the Python ML image — same /usr/local layout
+# as the standalone backend stage so logs/paths stay identical.
+COPY --from=backend-builder /build/target/release/makina /usr/local/bin/makina
+
+# Loopback wiring — the Rust core talks to the Python ML over 127.0.0.1
+# so nothing ML-internal is exposed to the public internet.
+ENV ML_PORT=8081 \
+    MAKINA_ML_URL=http://127.0.0.1:8081 \
+    MAKINA_PUBLIC_MODE=true \
+    RUST_LOG=info \
+    MAKINA_LOG_LEVEL=info
+
+COPY ml/scripts/cloudrun-entrypoint.sh /usr/local/bin/cloudrun-entrypoint.sh
+RUN chmod +x /usr/local/bin/cloudrun-entrypoint.sh
+
+# Cloud Run injects $PORT — the entrypoint binds the Rust API to it.
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/cloudrun-entrypoint.sh"]

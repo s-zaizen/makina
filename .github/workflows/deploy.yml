@@ -1,0 +1,121 @@
+name: Deploy to GCP Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Workload Identity Federation needs `id-token: write` to mint the OIDC
+# token that GCP exchanges for a short-lived service account credential.
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT: ${{ vars.GCP_PROJECT }}            # e.g. makina-prod
+  GCP_REGION:  ${{ vars.GCP_REGION }}             # e.g. asia-northeast1
+  AR_REPO:     ${{ vars.AR_REPO }}                # e.g. makina
+  CR_SERVICE:  ${{ vars.CR_SERVICE }}             # e.g. makina-api
+  IMAGE_NAME:  cloudrun
+
+jobs:
+  test:
+    name: Test (Rust + pure-Python + frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Rust ──
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --all-targets
+
+      # ── Python (pure-Python tests only — heavy ML deps live in container) ──
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: pip install dev deps
+        run: pip install --upgrade pip openfeature-sdk pytest numpy
+      - name: ruff check
+        run: |
+          pip install ruff
+          ruff check ml/
+      - name: pytest (helpers + flags + converter)
+        working-directory: ml
+        run: |
+          pytest tests/test_training_helpers.py tests/test_converter.py tests/test_flags.py -q
+
+      # ── Frontend ──
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+      - name: svelte-check
+        working-directory: frontend
+        run: npm run check
+      - name: vitest
+        working-directory: frontend
+        run: npm test
+
+  deploy:
+    name: Build → Push → Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── GCP auth via Workload Identity Federation (no service account keys) ──
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      # ── Build the cloudrun stage and push ──
+      - name: Build image
+        run: |
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}/${IMAGE_NAME}:${GITHUB_SHA}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          docker build --target cloudrun -t "$IMAGE" .
+
+      - name: Push image
+        run: docker push "${IMAGE}"
+
+      # ── Deploy. min-instances=1 keeps CodeBERT warm; cpu-boost helps cold-start. ──
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${CR_SERVICE}" \
+            --image "${IMAGE}" \
+            --region "${GCP_REGION}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 2Gi \
+            --cpu 1 \
+            --cpu-boost \
+            --min-instances 1 \
+            --max-instances 3 \
+            --timeout 300 \
+            --port 8080 \
+            --set-env-vars MAKINA_PUBLIC_MODE=true,RUST_LOG=info,MAKINA_LOG_LEVEL=info
+
+      - name: Show service URL
+        run: |
+          gcloud run services describe "${CR_SERVICE}" \
+            --region "${GCP_REGION}" \
+            --format='value(status.url)'
