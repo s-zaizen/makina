@@ -72,6 +72,9 @@ jobs:
     name: Build → Push → Deploy
     needs: test
     runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://${{ vars.CR_SERVICE }}-${{ vars.GCP_REGION }}.run.app
     steps:
       - uses: actions/checkout@v4
 
