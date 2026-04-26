@@ -160,10 +160,17 @@ COPY --from=backend-builder /build/target/release/makina /usr/local/bin/makina
 ARG MAKINA_MODEL_VERSION=v1.0.8
 COPY models/${MAKINA_MODEL_VERSION}/model.json /root/.makina/model.json
 COPY models/${MAKINA_MODEL_VERSION}/metrics.json /root/.makina/metrics.json
-# Knowledge showcase — pre-built DB so the Knowledge tab on makina.sh
-# has content even though public mode disables the live Verify Submit
-# write path.
-COPY models/${MAKINA_MODEL_VERSION}/knowledge.db /root/.makina/knowledge.db
+
+# Knowledge showcase — public mode disables the live Verify Submit
+# write path, so we materialise knowledge.db here at image build time
+# from the same samples.jsonl we trained on. Binary DBs aren't checked
+# into git; only the text source is.
+COPY models/${MAKINA_MODEL_VERSION}/samples.jsonl /tmp/samples.jsonl
+COPY ml/scripts/seed_knowledge.py /tmp/seed_knowledge.py
+RUN python3 /tmp/seed_knowledge.py \
+        --jsonl /tmp/samples.jsonl \
+        --out   /root/.makina/knowledge.db \
+    && rm -f /tmp/samples.jsonl /tmp/seed_knowledge.py
 
 # Loopback wiring — the Rust core talks to the Python ML over 127.0.0.1
 # so nothing ML-internal is exposed to the public internet.
