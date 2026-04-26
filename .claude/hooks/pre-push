@@ -17,3 +17,17 @@ ruff check ml/ || exit 1
 
 echo "pre-push: npm run check" >&2
 (cd frontend && npm run check --silent) || exit 1
+
+echo "pre-push: npm test (vitest)" >&2
+(cd frontend && npm test --silent) || exit 1
+
+# Python pytest needs xgboost / sklearn / tree-sitter, all of which live
+# in the `ml` container. We run pytest inside the container if it's up;
+# otherwise we skip with a warning so a developer who only touched Rust
+# or frontend isn't forced to spin up the ML stack.
+if docker compose ps --status running --services 2>/dev/null | grep -q '^ml$'; then
+    echo "pre-push: pytest (in ml container)" >&2
+    docker compose exec -T ml pytest /ml/tests --quiet || exit 1
+else
+    echo "pre-push: SKIPPING pytest — ml container not running (start with 'docker compose up -d ml')" >&2
+fi

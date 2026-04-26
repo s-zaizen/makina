@@ -178,11 +178,21 @@ Standalone docs-only commits exist only for documentation that is truly independ
 
 ## Testing
 
-**Current coverage**: there are no unit tests yet — `cargo test` runs
-zero tests, the Python service has no `test_*.py`, and the frontend
-has no test runner configured. New code should land with tests where
-practical (`refactor:` and `fix:` commits especially), but the bar is
-"don't make it worse" until a baseline test setup exists.
+Each stack has its own runner. Add tests when changing public API,
+the GBDT pipeline, taint detection, or anything users actually rely on.
+
+| Stack    | Command                                         | Where             |
+|----------|-------------------------------------------------|-------------------|
+| Rust     | `cargo test`                                    | `crates/makina/src/**/tests`         |
+| Python   | `docker compose exec ml pytest /ml/tests`       | `ml/tests/`       |
+| Frontend | `cd frontend && npm test`                       | `frontend/src/**/*.test.ts` |
+
+The Python suite needs `xgboost` / `sklearn` / `tree-sitter`, which is
+why it runs inside the `ml` container. For a thin dev install you can
+still run the pure-Python tests with `pip install ml[dev]` followed by
+`cd ml && pytest tests/test_training_helpers.py tests/test_converter.py`
+— the heavier `test_training_pipeline.py` and `test_taint_engine.py`
+auto-skip when their imports aren't available.
 
 End-to-end: `docker compose up -d`, then use `/vuln-add` in Claude Code
 to queue a case. For ad-hoc smoke testing, the routes most worth
@@ -191,6 +201,6 @@ hitting are `/api/scan`, `/api/stats`, and `/api/knowledge`.
 Automatic checks run at two points:
 
 - **Edit/Write** — `.claude/hooks/typecheck.sh` (PostToolUse): `cargo clippy`, `ruff check`, `npm run check`
-- **Push** — `.claude/hooks/pre-push` (git hook + PreToolUse gate): clippy + `cargo test` + ruff + npm check
+- **Push** — `.claude/hooks/pre-push` (git hook + PreToolUse gate): clippy + `cargo test` + ruff + npm check + `npm test` + pytest (in container if running)
 
 Language-specific style rules are in `.claude/rules/`.
