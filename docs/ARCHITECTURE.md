@@ -6,6 +6,34 @@ makina is a security scanner that continuously self-learns from human verificati
 The model updates on **every Verify Submit** — not at fixed thresholds.
 Label count is a maturity indicator, not a capability gate.
 
+### Code organisation: Hexagonal + Vertical Slice
+
+The Rust core is laid out as **vertical slices over a hexagonal core**:
+
+- **Vertical slice (`features/`)** — one module per user-visible feature
+  (Scan, Verify, Knowledge, Model, plus the supporting `labels` and
+  `findings` endpoints). Each slice owns its handler and stays free of
+  unrelated concerns; new features land as new directories rather than
+  edits to a god `handlers.rs`.
+- **Hexagonal boundary (`infra/`)** — every byte of `reqwest` traffic to
+  the Python ML service goes through `MlClient`. Feature handlers see
+  domain types (`Finding`, `Language`) and never serialise wire
+  formats themselves; this is the seam tests will swap.
+- **Data layer (`store/`)** — SQLite reads/writes for the three
+  databases. Functions are imported by handlers via `crate::store::*`.
+- **Shared API contract (`api/`)** — `Router::new()` composition and
+  request/response DTOs. No business logic.
+
+The Python ML service follows the same shape on a smaller scale: thin
+FastAPI handlers in `server.py` delegate to `services/` modules
+(currently `training.py` for the GBDT pipeline) so the wire format stays
+separate from the ML code path. The `analyzer.py`, `embedder.py`,
+`taint_engine.py`, etc. modules are the domain core that services compose.
+
+The frontend follows MVVM-ish separation: `lib/api.ts` is the network
+boundary, `lib/types.ts` the shared contract, `lib/components/` the
+view layer, and `+page.svelte` the page-level state coordinator.
+
 ## System Components
 
 ```
@@ -292,17 +320,30 @@ verified_at TEXT
 ```
 makina/
 ├── crates/makina/           Rust core (axum API, SQLite, scan orchestration)
-│   └── src/
-│       ├── api/           handlers.rs, models.rs, mod.rs
-│       ├── feedback/      store.rs (SQLite), mod.rs
-│       └── logging.rs     tracing JSON init + request_id middleware
+│   └── src/                 — hexagonal + vertical-slice layout
+│       ├── api/             router composition + shared API DTOs
+│       │   ├── mod.rs       Router::new() wiring features::* into routes
+│       │   └── models.rs    request/response types (Finding, Scan*, …)
+│       ├── features/        one module per user-visible feature
+│       │   ├── scan/        POST /api/scan — semgrep + analyze + taint
+│       │   ├── labels/      POST /api/feedback — TP/FP toggle on a finding
+│       │   ├── findings/    POST /api/findings/manual — bulk_import seed
+│       │   ├── verify/      GET/POST/DELETE /api/verify/queue
+│       │   ├── knowledge/   GET/POST /api/knowledge
+│       │   └── model/       /api/stats, /api/retrain, /api/model_metrics
+│       ├── infra/           outbound adapters
+│       │   └── ml.rs        MlClient — single seam for ML HTTP traffic
+│       ├── store/           SQLite data layer (feedback/verify/knowledge.db)
+│       └── logging.rs       tracing JSON init + request_id middleware
 ├── ml/                    Python ML service (FastAPI)
 │   ├── scripts/           bulk_import.py (dataset → knowledge, no scan)
 │   │   ├── converters/    cvefixes.py (method pairs → samples.jsonl)
 │   │   │                  cvefixes_pairs.py (diff hunks → samples_pairs.jsonl)
 │   │   └── run_ablations.py  pair-feature ablation harness (research)
 │   └── makina_ml/
-│       ├── server.py      API endpoints + GBDT train/predict
+│       ├── server.py      thin FastAPI route handlers
+│       ├── services/
+│       │   └── training.py GBDT pipeline (load → split → fit → eval → persist)
 │       ├── analyzer.py    CodeBERT semantic analysis
 │       ├── embedder.py    CodeBERT embedding (lazy-loaded)
 │       ├── taint_engine.py interprocedural taint via tree-sitter
@@ -318,7 +359,8 @@ makina/
 │           ├── highlighter.ts  shiki singleton (vitesse-dark theme)
 │           ├── api.ts     fetch wrappers (PUBLIC_API_URL)
 │           ├── types.ts   shared TypeScript types
-│           └── folder.ts  folder drag-and-drop utilities
+│           ├── folder.ts  folder drag-and-drop utilities
+│           └── placeholders.ts  per-language sample snippets for the Scan tab
 ├── third_party/           External assets (not vendored)
 │   └── datasets/          Training datasets (fetched via per-dir fetch.sh)
 │       └── cvefixes/      CVEfixes — CC BY 4.0, see README.md

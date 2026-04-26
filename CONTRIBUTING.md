@@ -91,15 +91,29 @@ docker compose exec -T ml python3 /ml/scripts/run_ablations.py \
 ## Project Layout
 
 ```
-crates/makina/   Rust core — axum API, SQLite, scan orchestration
-ml/            Python ML service — CodeBERT, GBDT, semgrep, taint
-frontend/      SvelteKit UI — Scan / Verify / Knowledge tabs
-docs/          Architecture and design documentation
-.claude/       Claude Code configuration
-  commands/    Slash commands — vuln-add, vuln-verify, vuln-add-verify-with-claude
-  hooks/       typecheck.sh (PostToolUse), pre-push (git hook), prepush-gate.sh (PreToolUse)
-  rules/       Path-scoped lint/style rules (backend, ml, frontend)
-  settings.json  Hook configuration
+crates/makina/src/   Rust core — hexagonal + vertical-slice
+  api/               router composition + shared API DTOs
+  features/          one module per feature (scan, labels, findings,
+                     verify, knowledge, model)
+  infra/ml.rs        outbound adapter for the Python ML service
+  store/             SQLite data layer
+  logging.rs         tracing + request_id middleware
+ml/makina_ml/        Python ML service (FastAPI)
+  server.py          thin route handlers
+  services/          use cases (training.py = GBDT pipeline)
+  analyzer.py / embedder.py / taint_engine.py / call_graph.py …
+                     domain modules (CodeBERT, taint, call graph, features)
+frontend/src/        SvelteKit UI (Svelte 5 Runes)
+  routes/            +page.svelte (state + layout coordinator)
+  lib/components/    Scan / Verify / Knowledge / Model tab components
+  lib/api.ts         fetch wrappers (PUBLIC_API_URL)
+  lib/placeholders.ts  per-language sample snippets for the Scan tab
+docs/                Architecture and design documentation
+.claude/             Claude Code configuration
+  commands/          Slash commands — vuln-add, vuln-verify, vuln-add-verify-with-claude
+  hooks/             typecheck.sh (PostToolUse), pre-push (git), prepush-gate.sh (PreToolUse)
+  rules/             Path-scoped lint/style rules (backend, ml, frontend)
+  settings.json      Hook configuration
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a full system overview.
@@ -164,7 +178,15 @@ Standalone docs-only commits exist only for documentation that is truly independ
 
 ## Testing
 
-End-to-end: `docker compose up -d`, then use `/vuln-add` in Claude Code to queue a case.
+**Current coverage**: there are no unit tests yet — `cargo test` runs
+zero tests, the Python service has no `test_*.py`, and the frontend
+has no test runner configured. New code should land with tests where
+practical (`refactor:` and `fix:` commits especially), but the bar is
+"don't make it worse" until a baseline test setup exists.
+
+End-to-end: `docker compose up -d`, then use `/vuln-add` in Claude Code
+to queue a case. For ad-hoc smoke testing, the routes most worth
+hitting are `/api/scan`, `/api/stats`, and `/api/knowledge`.
 
 Automatic checks run at two points:
 
