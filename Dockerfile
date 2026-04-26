@@ -78,6 +78,8 @@ WORKDIR /ml
 
 COPY ml/pyproject.toml ./
 COPY ml/makina_ml/ ./makina_ml/
+COPY ml/scripts/ ./scripts/
+COPY ml/tests/ ./tests/
 COPY ml/semgrep-custom/ /opt/semgrep-custom/
 
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
@@ -94,7 +96,8 @@ RUN pip install --no-cache-dir \
     "semgrep>=1.70.0" \
     "tree-sitter==0.21.3" \
     "tree-sitter-languages==1.10.2" \
-    "python-json-logger>=2.0.7"
+    "python-json-logger>=2.0.7" \
+    "pytest>=8.0.0"
 
 RUN git clone --depth 1 --filter=blob:none --sparse \
         https://github.com/semgrep/semgrep-rules.git /opt/semgrep-rules \
