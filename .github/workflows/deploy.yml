@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: pip install dev deps
-        run: pip install --upgrade pip openfeature-sdk pytest numpy
+        run: pip install --upgrade pip openfeature-sdk pytest numpy httpx
       - name: ruff check
         run: |
           pip install ruff
