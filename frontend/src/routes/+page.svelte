@@ -5,6 +5,7 @@
 	import FileTree from '$lib/components/FileTree.svelte';
 	import FindingCard from '$lib/components/FindingCard.svelte';
 	import KnowledgeTab from '$lib/components/KnowledgeTab.svelte';
+	import ModelTab from '$lib/components/ModelTab.svelte';
 	import ScanPanel from '$lib/components/ScanPanel.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import VerifyTab from '$lib/components/VerifyTab.svelte';
@@ -21,10 +22,10 @@
 	import { readFolder, flatFiles } from '$lib/folder';
 	import type { Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode } from '$lib/types';
 
-	type Tab = 'scan' | 'verify' | 'knowledge';
+	type Tab = 'scan' | 'verify' | 'knowledge' | 'model';
 
 	const PLACEHOLDERS: Record<Language, string> = {
-		auto: `# Paste any code here — deus will auto-detect the language
+		auto: `# Paste any code here — makina will auto-detect the language
 import os
 def run(cmd):
     os.system(cmd)
@@ -276,7 +277,7 @@ char* getBuffer(int size) {
 			const result = await scanCode(code, language);
 			findings = result.findings;
 		} catch {
-			error = 'Cannot connect to deus server. Run: docker compose up -d';
+			error = 'Cannot connect to makina server. Run: docker compose up -d';
 		} finally {
 			scanning = false;
 		}
@@ -406,12 +407,12 @@ char* getBuffer(int size) {
 
 	<!-- Header -->
 	<div class="relative z-10 flex items-center gap-3 h-12 px-4 bg-gray-900/90 border-b border-gray-800 shrink-0 backdrop-blur-sm">
-		<span class="text-base font-bold text-gray-100 tracking-tight">deus</span>
+		<span class="text-base font-bold text-gray-100 tracking-tight">makina</span>
 		<div class="w-px h-5 bg-gray-700 mx-1"></div>
 
 		<!-- Tabs -->
 		<nav class="flex items-center gap-1">
-			{#each (['scan', 'verify', 'knowledge'] as Tab[]) as tab}
+			{#each (['scan', 'verify', 'knowledge', 'model'] as Tab[]) as tab}
 				<button
 					onclick={() => (activeTab = tab)}
 					class={[
@@ -450,9 +451,11 @@ char* getBuffer(int size) {
 	<div class="relative z-10 flex flex-col flex-1 min-h-0">
 	{#if activeTab === 'scan'}
 		<div class="flex flex-1 min-h-0">
-			<!-- File tree sidebar -->
-			{#if folderRoot}
-				<div class="hidden lg:flex w-52 xl:w-60 shrink-0 flex-col">
+			<!-- File tree sidebar — always present; shows an empty-state
+			     placeholder until a folder is loaded so users see the
+			     workspace layout from the first paint. -->
+			<div class="hidden lg:flex w-52 xl:w-60 shrink-0 flex-col">
+				{#if folderRoot}
 					<FileTree
 						root={folderRoot}
 						selectedPath={selectedFile?.path ?? null}
@@ -462,11 +465,40 @@ char* getBuffer(int size) {
 						onscanall={handleScanAll}
 						onclear={handleClearFolder}
 					/>
-				</div>
-			{/if}
+				{:else}
+					<div class="flex h-full flex-col bg-gray-950/70 border-r border-gray-800/60">
+						<div class="flex items-center gap-2 px-3 py-2 border-b shrink-0" style="border-color:#1a2035;">
+							<span class="text-xs font-mono text-gray-600 truncate flex-1">
+								(no folder)
+							</span>
+						</div>
+						<div class="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+							<svg
+								class="w-8 h-8 text-gray-700"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+								stroke-width="1.4"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+								/>
+							</svg>
+							<p class="text-xs text-gray-500 leading-relaxed">
+								Drop a folder<br />on the editor
+							</p>
+							<p class="text-[10px] text-gray-700 italic leading-relaxed">
+								or paste code into the editor for a one-off scan
+							</p>
+						</div>
+					</div>
+				{/if}
+			</div>
 
 			<!-- Editor -->
-			<div class={`flex flex-col min-h-0 border-r border-gray-800/60 ${folderRoot ? 'flex-1' : 'w-full lg:w-3/5'}`}>
+			<div class="flex flex-1 flex-col min-h-0 border-r border-gray-800/60">
 				<CodeEditor
 					value={code}
 					onchange={(v) => (code = v)}
@@ -479,10 +511,7 @@ char* getBuffer(int size) {
 			</div>
 
 			<!-- Findings panel -->
-			<div class={[
-				'overflow-y-auto p-3 flex flex-col gap-2 bg-gray-950/70',
-				folderRoot ? 'hidden lg:flex w-72 xl:w-80 shrink-0' : 'hidden lg:flex w-2/5'
-			].join(' ')}>
+			<div class="hidden lg:flex w-72 xl:w-80 shrink-0 overflow-y-auto p-3 flex-col gap-2 bg-gray-950/70">
 				{#if error}
 					<div class="bg-red-900/40 border border-red-800 rounded p-3 text-sm text-red-300">
 						{error}
@@ -517,7 +546,9 @@ char* getBuffer(int size) {
 			onsubmit={handleCaseSubmit}
 		/>
 	{:else if activeTab === 'knowledge'}
-		<KnowledgeTab {stats} history={knowledgeHistory} />
+		<KnowledgeTab history={knowledgeHistory} />
+	{:else if activeTab === 'model'}
+		<ModelTab {stats} historyCount={knowledgeHistory.length} />
 	{/if}
 
 	<!-- Status bar -->

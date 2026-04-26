@@ -1,80 +1,15 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import type { Stats, KnowledgeCase, Label, Language, ModelMetrics } from '$lib/types';
-	import { getModelMetrics } from '$lib/api';
+	import type { KnowledgeCase, Label, Language } from '$lib/types';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import FindingCard from '$lib/components/FindingCard.svelte';
 
-	let { stats, history }: { stats: Stats | null; history: KnowledgeCase[] } = $props();
-
-	let metrics = $state<ModelMetrics | null>(null);
-	let nowTick = $state(Date.now());
-	// Refetch whenever the label count changes (i.e. a retrain has fired).
-	$effect(() => {
-		void stats?.total_labels;
-		getModelMetrics().then((m) => (metrics = m)).catch(() => {});
-	});
-	onMount(() => {
-		getModelMetrics().then((m) => (metrics = m)).catch(() => {});
-		// Tick every 30 s so the "trained X ago" label stays live without
-		// polling the backend (the metrics themselves only change when a
-		// retrain fires; this just keeps the relative timestamp moving).
-		const tick = setInterval(() => { nowTick = Date.now(); }, 30_000);
-		return () => clearInterval(tick);
-	});
-
-	function formatRelative(iso: string, now: number): string {
-		const d = new Date(iso);
-		const s = Math.round((now - d.getTime()) / 1000);
-		if (s < 60) return `${s}s ago`;
-		if (s < 3600) return `${Math.round(s / 60)}m ago`;
-		if (s < 86400) {
-			const h = Math.floor(s / 3600);
-			const m = Math.round((s % 3600) / 60);
-			return m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
-		}
-		return `${Math.round(s / 86400)}d ago`;
-	}
-
-	function pct(x: number | undefined): string {
-		if (x === undefined || x === null) return '–';
-		return `${(x * 100).toFixed(1)}%`;
-	}
-
-	function accColor(acc: number | undefined): string {
-		if (acc === undefined) return 'text-gray-500';
-		if (acc >= 0.85) return 'text-emerald-400';
-		if (acc >= 0.70) return 'text-indigo-400';
-		if (acc >= 0.55) return 'text-amber-400';
-		return 'text-red-400';
-	}
-
-	/** Compact notation for large counts: 10000 → "10K", 1500 → "1.5K", 999 → "999". */
-	function compact(n: number): string {
-		if (n < 1000) return n.toString();
-		if (n < 10000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
-		if (n < 1_000_000) return Math.round(n / 1000) + 'K';
-		return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
-	}
-
-	const STAGES = [
-		{ key: 'bootstrapping', label: 'Bootstrapping', min: 0 },
-		{ key: 'learning', label: 'Learning', min: 1 },
-		{ key: 'refining', label: 'Refining', min: 50 },
-		{ key: 'mature', label: 'Mature', min: 500 }
-	];
+	let { history }: { history: KnowledgeCase[] } = $props();
 
 	const sevColor: Record<string, string> = {
 		critical: 'text-red-400 bg-red-950/60 border-red-800',
 		high: 'text-orange-400 bg-orange-950/60 border-orange-800',
 		medium: 'text-yellow-400 bg-yellow-950/60 border-yellow-800',
 		low: 'text-blue-400 bg-blue-950/60 border-blue-800'
-	};
-	const sevDot: Record<string, string> = {
-		critical: 'bg-red-500',
-		high: 'bg-orange-500',
-		medium: 'bg-yellow-500',
-		low: 'bg-blue-500'
 	};
 	const langColor: Record<string, string> = {
 		python: 'text-blue-400 bg-blue-950 border-blue-800',
@@ -87,12 +22,6 @@
 		c: 'text-gray-400 bg-gray-800 border-gray-600',
 		cpp: 'text-purple-400 bg-purple-950 border-purple-800'
 	};
-	const stageColor: Record<string, string> = {
-		bootstrapping: 'text-gray-500',
-		learning: 'text-blue-400',
-		refining: 'text-indigo-400',
-		mature: 'text-emerald-400'
-	};
 
 	function formatDate(iso: string) {
 		const d = new Date(iso);
@@ -102,22 +31,6 @@
 			d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
 		);
 	}
-
-	const total = $derived(stats?.total_labels ?? 0);
-	const tp = $derived(stats?.tp_count ?? 0);
-	const fp = $derived(stats?.fp_count ?? 0);
-	const tpRatio = $derived(total > 0 ? tp / total : 0);
-
-	const stageIdx = $derived(
-		Math.max(0, STAGES.findIndex((s) => s.key === stats?.model_stage))
-	);
-	const curMin = $derived(STAGES[stageIdx].min);
-	const nextStage = $derived(STAGES[stageIdx + 1] ?? null);
-	const bandPct = $derived(
-		nextStage !== null
-			? Math.min(100, Math.round(((total - curMin) / (nextStage.min - curMin)) * 100))
-			: 100
-	);
 
 	// Filter state
 	let searchQuery = $state('');
@@ -327,7 +240,7 @@
 	</div>
 
 	<!-- Center: Code viewer + findings -->
-	<div class="flex-1 min-w-0 flex flex-col min-h-0 border-r border-gray-800/60">
+	<div class="flex-1 min-w-0 flex flex-col min-h-0">
 		{#if selectedCase}
 			<div class="flex flex-1 min-h-0">
 				<!-- Code editor (readonly) -->
@@ -379,225 +292,5 @@
 				<p class="text-base text-gray-700">Click any case in the left panel</p>
 			</div>
 		{/if}
-	</div>
-
-	<!-- Right: Learning Status -->
-	<div class="hidden lg:block w-72 xl:w-80 shrink-0 overflow-y-auto px-4 py-4 bg-gray-950/70">
-		<h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
-			Learning Status
-		</h2>
-
-		<div class="space-y-3">
-			<!-- Stage -->
-			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
-				<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-					Model Status
-				</h3>
-				<div class="flex items-baseline gap-2 mb-3">
-					<span class={`text-xl font-bold capitalize ${stageColor[stats?.model_stage ?? 'bootstrapping']}`}>
-						{stats?.model_stage ?? 'bootstrapping'}
-					</span>
-					<span class="text-xs text-gray-600">stage</span>
-				</div>
-
-				<!-- Stage stepper -->
-				<div class="flex items-center gap-1 mb-3">
-					{#each STAGES as s, i}
-						{@const done = i < stageIdx}
-						{@const active = i === stageIdx}
-						<div class="flex items-center flex-1 last:flex-none">
-							<div class={['h-1.5 flex-1 rounded-full', done ? 'bg-emerald-500' : active ? 'bg-indigo-500/60' : 'bg-gray-800'].join(' ')}></div>
-							{#if i === STAGES.length - 1}
-								<div class={['w-2 h-2 rounded-full shrink-0 ml-1', done ? 'bg-emerald-500' : active ? 'bg-indigo-400' : 'bg-gray-800'].join(' ')}></div>
-							{/if}
-						</div>
-					{/each}
-				</div>
-
-				<div class="text-xs text-gray-700">
-					{#each STAGES as s, i}
-						<span class={i <= stageIdx ? 'text-gray-500' : 'text-gray-700'}>
-							{s.label}{i < STAGES.length - 1 ? ' → ' : ''}
-						</span>
-					{/each}
-				</div>
-
-				{#if nextStage !== null}
-					<div class="mt-3">
-						<div class="flex justify-between text-xs text-gray-700 mb-1">
-							<span>{nextStage.label}</span>
-							<span class="text-indigo-500">{total} / {nextStage.min}</span>
-						</div>
-						<div class="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-							<div
-								class="h-full bg-gradient-to-r from-indigo-700 to-indigo-400 transition-all duration-700"
-								style="width:{bandPct}%"
-							></div>
-						</div>
-					</div>
-				{/if}
-
-				<p class="text-xs text-gray-700 italic mt-2">Retrains on every Verify Submit</p>
-			</section>
-
-			<!-- Label stats -->
-			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
-				<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-					Accumulated Labels
-				</h3>
-
-				<div class="grid grid-cols-3 gap-1.5 mb-3">
-					{#each [{ label: 'Total', value: total, color: 'text-gray-100' }, { label: 'TP', value: tp, color: 'text-emerald-400' }, { label: 'FP', value: fp, color: 'text-red-400' }] as item}
-						<div
-							class="bg-gray-800/50 rounded-lg px-1.5 py-2 text-center border border-gray-700/30 min-w-0"
-							title={item.value.toLocaleString()}
-						>
-							<div class={`font-bold tabular-nums text-xl lg:text-2xl ${item.color}`}>
-								{compact(item.value)}
-							</div>
-							<div class="text-xs text-gray-600 mt-0.5">{item.label}</div>
-						</div>
-					{/each}
-				</div>
-
-				{#if total > 0}
-					<div class="flex justify-between text-xs text-gray-600 mb-1">
-						<span>TP / FP ratio</span>
-						<span>
-							<span class="text-emerald-500">{Math.round(tpRatio * 100)}%</span>
-							{' / '}
-							<span class="text-red-500">{Math.round((1 - tpRatio) * 100)}%</span>
-						</span>
-					</div>
-					<div class="h-2 bg-gray-800 rounded-full overflow-hidden flex">
-						<div class="h-full bg-emerald-500 transition-all duration-700" style="width:{tpRatio * 100}%"></div>
-						<div class="h-full bg-red-500/60 transition-all duration-700" style="width:{(1 - tpRatio) * 100}%"></div>
-					</div>
-				{:else}
-					<p class="text-xs text-gray-700 text-center py-1">
-						No labels yet — verify cases to accumulate knowledge.
-					</p>
-				{/if}
-			</section>
-
-			<!-- Model Quality (validation metrics) -->
-			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
-				<div class="flex items-center justify-between mb-3">
-					<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-						Model Quality
-					</h3>
-					{#if metrics?.trained_at}
-						<span class="text-[11px] text-gray-600 font-mono">
-							{formatRelative(metrics.trained_at, nowTick)}
-						</span>
-					{/if}
-				</div>
-
-				{#if !metrics}
-					<p class="text-xs text-gray-700 text-center py-2">
-						No training run yet. Submit a labeled case or run bulk import to train.
-					</p>
-				{:else if metrics.val_accuracy === undefined}
-					<p class="text-xs text-gray-700 text-center py-2">
-						Insufficient samples for train/val split (need ≥ 5 per class).
-						<br />
-						<span class="text-gray-600">Trained on {metrics.samples} samples.</span>
-					</p>
-				{:else}
-					<!-- Headline: val accuracy -->
-					<div class="flex items-baseline gap-2 mb-3">
-						<span class={`text-xl lg:text-2xl font-bold tabular-nums ${accColor(metrics.val_accuracy)}`}>
-							{pct(metrics.val_accuracy)}
-						</span>
-						<span class="text-xs text-gray-600">val accuracy</span>
-					</div>
-
-					<!-- Accuracy bar -->
-					<div class="h-1.5 bg-gray-800 rounded-full overflow-hidden mb-3">
-						<div
-							class={`h-full transition-all duration-700 ${
-								metrics.val_accuracy >= 0.85 ? 'bg-emerald-500' :
-								metrics.val_accuracy >= 0.70 ? 'bg-indigo-500' :
-								metrics.val_accuracy >= 0.55 ? 'bg-amber-500' : 'bg-red-500'
-							}`}
-							style="width:{(metrics.val_accuracy * 100).toFixed(1)}%"
-						></div>
-					</div>
-
-					<!-- Precision / Recall -->
-					<div class="grid grid-cols-2 gap-2 mb-3">
-						<div class="bg-gray-800/50 rounded-lg p-2 text-center border border-gray-700/30">
-							<div class="text-xs font-bold tabular-nums text-gray-200">{pct(metrics.val_precision)}</div>
-							<div class="text-[11px] text-gray-600 mt-0.5">Precision</div>
-						</div>
-						<div class="bg-gray-800/50 rounded-lg p-2 text-center border border-gray-700/30">
-							<div class="text-xs font-bold tabular-nums text-gray-200">{pct(metrics.val_recall)}</div>
-							<div class="text-[11px] text-gray-600 mt-0.5">Recall</div>
-						</div>
-					</div>
-
-					<!-- Detail rows -->
-					<div class="space-y-1 text-xs">
-						<div class="flex justify-between">
-							<span class="text-gray-600">Split</span>
-							<span class="text-gray-400 font-mono">{metrics.split}</span>
-						</div>
-						<div class="flex justify-between">
-							<span class="text-gray-600">Val samples</span>
-							<span class="text-gray-400 tabular-nums">{metrics.val_samples}</span>
-						</div>
-						{#if metrics.val_prob_mean_tp !== undefined && metrics.val_prob_mean_tp !== null}
-							<div class="flex justify-between">
-								<span class="text-gray-600">Mean p(TP) on TPs</span>
-								<span class="text-emerald-500 tabular-nums">{metrics.val_prob_mean_tp.toFixed(2)}</span>
-							</div>
-						{/if}
-						{#if metrics.val_prob_mean_fp !== undefined && metrics.val_prob_mean_fp !== null}
-							<div class="flex justify-between">
-								<span class="text-gray-600">Mean p(TP) on FPs</span>
-								<span class="text-red-500 tabular-nums">{metrics.val_prob_mean_fp.toFixed(2)}</span>
-							</div>
-						{/if}
-						<div class="flex justify-between">
-							<span class="text-gray-600">Train time</span>
-							<span class="text-gray-400 tabular-nums">{(metrics.elapsed_ms / 1000).toFixed(1)}s</span>
-						</div>
-					</div>
-
-					<!-- Overfit hint -->
-					{#if metrics.val_prob_mean_tp !== undefined && metrics.val_prob_mean_fp !== undefined && metrics.val_prob_mean_tp !== null && metrics.val_prob_mean_fp !== null}
-						{@const gap = metrics.val_prob_mean_tp - metrics.val_prob_mean_fp}
-						<div class="mt-2 pt-2 border-t border-gray-800/60">
-							<div class="flex justify-between text-xs">
-								<span class="text-gray-600">TP/FP separation</span>
-								<span class={`tabular-nums ${gap >= 0.3 ? 'text-emerald-500' : gap >= 0.15 ? 'text-amber-500' : 'text-red-400'}`}>
-									Δ {gap.toFixed(2)}
-								</span>
-							</div>
-							<p class="text-[11px] text-gray-700 italic mt-1">
-								{gap >= 0.3
-									? 'Clear separation — model discriminates well.'
-									: gap >= 0.15
-									? 'Weak separation — confidences cluster near 0.5.'
-									: 'Near zero separation — GBDT adds little signal; collect more diverse labels.'}
-							</p>
-						</div>
-					{/if}
-				{/if}
-			</section>
-
-			<!-- Summary -->
-			<section class="rounded-xl border border-gray-800 bg-gray-900 p-4">
-				<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Summary</h3>
-				<div class="space-y-1.5">
-					{#each [{ label: 'Cases verified', value: history.length }, { label: 'Findings labeled', value: total }, { label: 'True positives', value: tp }, { label: 'False positives', value: fp }] as r}
-						<div class="flex justify-between text-xs">
-							<span class="text-gray-600">{r.label}</span>
-							<span class="text-gray-300 tabular-nums font-medium">{r.value}</span>
-						</div>
-					{/each}
-				</div>
-			</section>
-		</div>
 	</div>
 </div>
