@@ -114,6 +114,15 @@ RUN git clone --depth 1 --filter=blob:none --sparse \
         rust/lang/security \
     && rm -rf /opt/semgrep-rules/.git
 
+# Pre-download CodeBERT into the image so Cloud Run cold-starts hit a
+# warm local cache instead of pulling ~500 MB from the HuggingFace hub
+# on every revision boot. The cache lives outside `/root/.makina` so
+# the runtime VOLUME directive on that path doesn't shadow it.
+ENV MAKINA_MODELS=/opt/codebert-cache
+RUN python -c "from transformers import AutoTokenizer, AutoModel; \
+    AutoTokenizer.from_pretrained('microsoft/codebert-base', cache_dir='/opt/codebert-cache'); \
+    AutoModel.from_pretrained('microsoft/codebert-base', cache_dir='/opt/codebert-cache')"
+
 VOLUME ["/root/.makina"]
 EXPOSE 8080
 
