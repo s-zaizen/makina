@@ -58,11 +58,13 @@
 
 	// ── Init ─────────────────────────────────────────────────────────────────────
 
-	// Live counter for stats (cheap, 2s poll) + throttled refresh of the
-	// heavy queue/knowledge endpoints only when the label count actually
-	// moved. Keeps the header ticking during bulk imports without hammering
-	// the backend with full list fetches every interval.
-	const HEAVY_REFRESH_INTERVAL_MS = 3_000;
+	// Stats / queue / knowledge are fetched once at mount so the
+	// StatusBar shows real numbers, then polled only while the user
+	// sits on the Model tab — that's the only view where a ticking
+	// label count matters. Other tabs stay frozen at the last fetch
+	// (cheap and avoids hammering /api/stats every few seconds).
+	const POLL_INTERVAL_MS = 30_000;
+	const HEAVY_REFRESH_INTERVAL_MS = 60_000;
 	let lastSeenTotalLabels = 0;
 	let lastHeavyRefreshAt = 0;
 
@@ -92,7 +94,15 @@
 		void preloadHighlighter();
 		void refreshHeavy();
 		void pollTick();
-		const tick = setInterval(() => void pollTick(), 2000);
+	});
+
+	// Poll only while the Model tab is the active view. Switching away
+	// tears down the interval; switching back re-runs an immediate fetch
+	// and re-arms it. Other tabs see the last cached snapshot.
+	$effect(() => {
+		if (activeTab !== 'model') return;
+		void pollTick();
+		const tick = setInterval(() => void pollTick(), POLL_INTERVAL_MS);
 		return () => clearInterval(tick);
 	});
 
