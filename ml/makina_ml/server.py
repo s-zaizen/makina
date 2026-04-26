@@ -8,12 +8,12 @@ Endpoints:
   POST /predict          return confidence score for a feature vector
   POST /analyze          semantic analysis via CodeBERT (all languages)
   POST /semgrep          rule-based scan via semgrep community rules
+
+Route handlers stay thin — heavy lifting lives in `services/`.
 """
 
-import json
 import logging
 import os
-import sqlite3
 import time
 import uuid
 from pathlib import Path
@@ -26,6 +26,7 @@ import uvicorn
 
 from . import embedder, analyzer, semgrep_scanner
 from .logging_config import reset_request_id, set_request_id, setup_logging
+from .services import training
 
 setup_logging()
 logger = logging.getLogger("makina_ml")
@@ -73,53 +74,6 @@ async def request_id_middleware(request: Request, call_next):
 # Start loading CodeBERT in the background immediately
 embedder.ensure_loaded()
 
-# ---------- helpers ----------------------------------------------------------
-
-
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def _label_count() -> dict:
-    if not DB_PATH.exists():
-        return {"total": 0, "tp": 0, "fp": 0}
-    conn = _db()
-    total = conn.execute(
-        "SELECT COUNT(*) FROM findings WHERE label IS NOT NULL"
-    ).fetchone()[0]
-    tp = conn.execute("SELECT COUNT(*) FROM findings WHERE label = 'tp'").fetchone()[0]
-    fp = conn.execute("SELECT COUNT(*) FROM findings WHERE label = 'fp'").fetchone()[0]
-    conn.close()
-    return {"total": total, "tp": tp, "fp": fp}
-
-
-def _model_stage(total: int) -> str:
-    """Maturity indicator — not a capability gate.
-    The model trains and predicts from the first label onward."""
-    if total == 0:
-        return "bootstrapping"
-    if total < 50:
-        return "learning"
-    if total < 500:
-        return "refining"
-    return "mature"
-
-
-def _load_model():
-    """Load XGBoost model if available, else return None."""
-    if not MODEL_PATH.exists():
-        return None
-    try:
-        import xgboost as xgb
-
-        m = xgb.XGBClassifier()
-        m.load_model(str(MODEL_PATH))
-        return m
-    except Exception:
-        return None
-
 
 # ---------- endpoints --------------------------------------------------------
 
@@ -131,12 +85,12 @@ def health():
 
 @app.get("/status")
 def status():
-    counts = _label_count()
+    counts = training.label_counts(DB_PATH)
     return {
         "total_labels": counts["total"],
         "tp_count": counts["tp"],
         "fp_count": counts["fp"],
-        "model_stage": _model_stage(counts["total"]),
+        "model_stage": training.model_stage(counts["total"]),
         "model_ready": MODEL_PATH.exists(),
         "labels_until_next_stage": 0,
         "embedding_model_status": embedder.status(),
@@ -152,192 +106,23 @@ class TrainRequest(BaseModel):
 def train(req: TrainRequest):
     """Retrain GBDT on all accumulated labels. Called after every Verify Submit."""
     try:
-        import xgboost as xgb
+        import xgboost  # noqa: F401  — pre-flight; service raises if missing
     except ImportError:
         raise HTTPException(status_code=500, detail="xgboost not installed.")
 
-    if not DB_PATH.exists():
-        logger.info("train skipped: no database yet")
-        return {"ok": False, "reason": "no database yet", "samples": 0}
-
-    conn = _db()
-    # `group_key` was added in a later schema; older DBs may lack the column
-    # so we read it via a NULL-tolerant subquery and fall back gracefully.
-    has_group_col = (
-        conn.execute(
-            "SELECT 1 FROM pragma_table_info('findings') WHERE name='group_key'"
-        ).fetchone()
-        is not None
-    )
-    if has_group_col:
-        rows = conn.execute(
-            "SELECT feature_vector, label, group_key FROM findings "
-            "WHERE label IS NOT NULL AND feature_vector IS NOT NULL"
-        ).fetchall()
-    else:
-        rows = [
-            (fv, lbl, None)
-            for fv, lbl in conn.execute(
-                "SELECT feature_vector, label FROM findings "
-                "WHERE label IS NOT NULL AND feature_vector IS NOT NULL"
-            ).fetchall()
-        ]
-    conn.close()
-
-    X, y, groups = [], [], []
-    for fv_bytes, label, group_key in rows:
-        fv = np.frombuffer(fv_bytes, dtype="<f4")
-        if len(fv) == 768:
-            X.append(fv)
-            y.append(1 if label == "tp" else 0)
-            groups.append(group_key)
-
-    if len(set(y)) < 2:
-        logger.info(
-            "train skipped: single-class",
-            extra={"samples": len(X), "stage": _model_stage(len(X))},
-        )
-        return {"ok": False, "reason": "need both TP and FP labels", "samples": len(X)}
-
-    X_arr, y_arr = np.array(X), np.array(y)
-    tp_count = int(y_arr.sum())
-    fp_count = int(len(y_arr) - tp_count)
-
-    # CVE-aware grouping: every sample produced by bulk_import carries its
-    # CVE id as group_key, so a paired TP/FP twin never straddles the
-    # train/val split. Live-scan rows have group_key=NULL — we fill those
-    # with unique synthetic ids so they each form a singleton group and
-    # behave the same as random samples.
-    use_group_split = (
-        any(g is not None for g in groups) and len({g for g in groups if g}) >= 2
-    )
-    if use_group_split:
-        groups_arr = np.array(
-            [g if g is not None else f"_solo_{i}" for i, g in enumerate(groups)]
-        )
-
-    # Train/val split — group-aware when we have CVE keys, stratified 80/20
-    # otherwise. Either way needs ≥ 5 of each class to be meaningful.
-    val_metrics: dict | None = None
-    can_split = min(tp_count, fp_count) >= 5
-    t0 = time.perf_counter()
-    if can_split and use_group_split:
-        from sklearn.model_selection import GroupShuffleSplit
-
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-        train_idx, val_idx = next(gss.split(X_arr, y_arr, groups=groups_arr))
-        X_train, X_val = X_arr[train_idx], X_arr[val_idx]
-        y_train, y_val = y_arr[train_idx], y_arr[val_idx]
-    elif can_split:
-        from sklearn.model_selection import train_test_split
-
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_arr, y_arr, test_size=0.2, random_state=42, stratify=y_arr
-        )
-    if can_split:
-        model = xgb.XGBClassifier(
-            n_estimators=100,
-            max_depth=4,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            eval_metric="logloss",
-            random_state=42,
-        )
-        model.fit(X_train, y_train)
-        # Eval on the held-out split
-        val_pred = model.predict(X_val)
-        val_prob = model.predict_proba(X_val)[:, 1]
-        val_acc = float((val_pred == y_val).mean())
-        # TP/FP precision/recall at 0.5 cutoff
-        tp_mask = (val_pred == 1) & (y_val == 1)
-        fp_mask = (val_pred == 1) & (y_val == 0)
-        fn_mask = (val_pred == 0) & (y_val == 1)
-        tp_pred = int(tp_mask.sum())
-        fp_pred = int(fp_mask.sum())
-        fn_pred = int(fn_mask.sum())
-        precision = float(tp_pred / (tp_pred + fp_pred)) if (tp_pred + fp_pred) else 0.0
-        recall = float(tp_pred / (tp_pred + fn_pred)) if (tp_pred + fn_pred) else 0.0
-        val_metrics = {
-            "val_samples": int(len(y_val)),
-            "val_accuracy": round(val_acc, 4),
-            "val_precision": round(precision, 4),
-            "val_recall": round(recall, 4),
-            "val_prob_mean_tp": round(float(val_prob[y_val == 1].mean()), 4)
-            if (y_val == 1).any()
-            else None,
-            "val_prob_mean_fp": round(float(val_prob[y_val == 0].mean()), 4)
-            if (y_val == 0).any()
-            else None,
-        }
-        # After reporting, retrain on the full dataset so the production model
-        # uses every label available.
-        model.fit(X_arr, y_arr)
-    else:
-        model = xgb.XGBClassifier(
-            n_estimators=100,
-            max_depth=4,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            eval_metric="logloss",
-            random_state=42,
-        )
-        model.fit(X_arr, y_arr)
-
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    model.save_model(str(MODEL_PATH))
-    elapsed_ms = int((time.perf_counter() - t0) * 1000)
-
-    from datetime import datetime, timezone
-
-    metrics = {
-        "trained_at": datetime.now(timezone.utc).isoformat(),
-        "samples": len(X),
-        "tp": tp_count,
-        "fp": fp_count,
-        "stage": _model_stage(len(X)),
-        "elapsed_ms": elapsed_ms,
-        "split": (
-            "80/20 group (CVE-aware)"
-            if (can_split and use_group_split)
-            else "80/20 stratified"
-            if can_split
-            else "no split (insufficient per-class samples)"
-        ),
-        **(val_metrics or {}),
-    }
-    try:
-        METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        METRICS_PATH.write_text(json.dumps(metrics, indent=2))
-    except Exception as e:
-        logger.warning("failed to persist metrics: %s", e)
-
-    logger.info("gbdt retrained", extra=metrics)
-
+    result = training.train(DB_PATH, MODEL_PATH, METRICS_PATH)
     # Fresh labels just landed — invalidate analyzer's kNN + GBDT caches so
     # the next /analyze call picks up the retrained artifacts.
-    analyzer.reset_index()
-
-    return {
-        "ok": True,
-        "samples": len(X),
-        "model_path": str(MODEL_PATH),
-        **(val_metrics or {}),
-    }
+    if result.get("ok"):
+        analyzer.reset_index()
+    return result
 
 
 @app.get("/metrics")
 def get_metrics():
     """Return the latest training metrics written by /train, or `None` if
     the model has not been trained yet."""
-    if not METRICS_PATH.exists():
-        return {"metrics": None}
-    try:
-        return {"metrics": json.loads(METRICS_PATH.read_text())}
-    except Exception as e:
-        logger.warning("failed to read metrics: %s", e)
-        return {"metrics": None}
+    return {"metrics": training.read_metrics(METRICS_PATH)}
 
 
 EMBEDDING_DIM = 768
@@ -349,7 +134,7 @@ class PredictRequest(BaseModel):
 
 @app.post("/predict")
 def predict(req: PredictRequest):
-    model = _load_model()
+    model = training.load_model(MODEL_PATH)
     if model is None:
         return {"confidence": None, "stage": "rules-only"}
 
@@ -375,7 +160,7 @@ def predict_batch(req: PredictBatchRequest):
     if not req.feature_vectors:
         return {"confidences": [], "model_ready": False}
 
-    model = _load_model()
+    model = training.load_model(MODEL_PATH)
     if model is None:
         return {"confidences": None, "model_ready": False}
 
