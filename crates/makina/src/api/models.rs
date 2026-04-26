@@ -147,3 +147,12 @@ pub struct SubmitKnowledgeRequest {
     pub case_no: i64,
     pub labels: HashMap<String, Label>,
 }
+
+/// Shared `?skip_train=true` query — used by Knowledge submit and
+/// Verify queue removal so the bulk-import path can defer retraining
+/// to a single trailing `/api/retrain` call.
+#[derive(Debug, Deserialize, Default)]
+pub struct SkipTrainQuery {
+    #[serde(default)]
+    pub skip_train: bool,
+}

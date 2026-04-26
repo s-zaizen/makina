@@ -1,4 +1,3 @@
-mod handlers;
 pub mod models;
 
 use axum::{
@@ -9,6 +8,7 @@ use axum::{
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::features::{findings, knowledge, labels, model, scan, verify};
 use crate::logging::request_id_mw;
 
 pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {
@@ -18,24 +18,18 @@ pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/api/scan", post(handlers::scan))
-        .route("/api/feedback", post(handlers::feedback))
-        .route("/api/findings/manual", post(handlers::manual_finding))
-        .route("/api/stats", get(handlers::stats))
-        .route(
-            "/api/verify/queue",
-            get(handlers::get_queue).post(handlers::add_to_queue),
-        )
-        .route(
-            "/api/verify/queue/:case_no",
-            delete(handlers::remove_from_queue),
-        )
+        .route("/api/scan", post(scan::scan))
+        .route("/api/feedback", post(labels::record))
+        .route("/api/findings/manual", post(findings::manual))
+        .route("/api/stats", get(model::stats))
+        .route("/api/verify/queue", get(verify::list).post(verify::add))
+        .route("/api/verify/queue/:case_no", delete(verify::remove))
         .route(
             "/api/knowledge",
-            get(handlers::get_knowledge).post(handlers::submit_knowledge),
+            get(knowledge::list).post(knowledge::submit),
         )
-        .route("/api/retrain", post(handlers::retrain))
-        .route("/api/model_metrics", get(handlers::model_metrics))
+        .route("/api/retrain", post(model::retrain))
+        .route("/api/model_metrics", get(model::metrics))
         .layer(middleware::from_fn(request_id_mw))
         .layer(cors);
 
