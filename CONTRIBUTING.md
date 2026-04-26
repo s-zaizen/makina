@@ -30,11 +30,13 @@ inside the `ml` container so it shares the cached CodeBERT weights.
 # 0. Fetch CVEfixes (one-time, ~3.9 GB)
 ./third_party/datasets/cvefixes/fetch.sh
 
-# 1. Convert CVEfixes → vulnerable-method samples for bulk_import.
-#    Each row is a full method body plus the diff's deleted-line spans
-#    projected onto method-relative coordinates. Each span becomes one
-#    TP finding at import time, so the GBDT trains on per-finding
-#    embeddings (full code as context, narrow line range as the focus).
+# 1. Convert CVEfixes → paired TP/FP samples for bulk_import.
+#    For each CVE pair we emit two records: a TP from the vulnerable
+#    method (deleted-line ranges) and an FP from the patched method
+#    (added-line ranges). Each range becomes one finding at import
+#    time so the GBDT trains on per-finding embeddings — full method
+#    as context, narrow line range as the focus, with hard
+#    counterexamples coming from the actual fix.
 python ml/scripts/converters/cvefixes.py
 
 # 2. Convert CVEfixes → diff-aware hunk pairs (for pair-feature experiments)

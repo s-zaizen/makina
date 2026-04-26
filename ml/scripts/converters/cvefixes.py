@@ -1,39 +1,45 @@
 #!/usr/bin/env python3
-"""Convert CVEfixes.db → samples.jsonl with full-method code + vulnerable
-line ranges.
+"""Convert CVEfixes.db → samples.jsonl with paired TP/FP cases.
 
-For each `method_change` row on the pre-patch side (`before_change='True'`)
-we keep the entire method body and project the diff's deleted-line set
-onto method-relative coordinates. Consecutive deleted lines are clustered
-into ranges; each range becomes one TP finding when imported. Methods
-whose diff produces no in-range deletions are skipped.
+For every method whose patch is recorded in CVEfixes we emit TWO cases
+keyed by the same CVE:
 
-This is the new corpus format that bulk_import.py expects: it lets the
-GBDT learn from per-finding embeddings (full code as context, narrow
-line range as the focus) instead of training on whole-method labels —
-the latter drifted from the per-finding distribution the model sees at
-inference time.
+    TP — the vulnerable side (`before_change='True'`).
+         `code` is the full method body, `ranges` are the diff's
+         deleted-line spans projected onto method-relative coordinates.
+
+    FP — the patched side  (`before_change='False'`).
+         `code` is the full patched method, `ranges` are the diff's
+         added-line spans on its method-relative coordinates.
+
+Why FP samples come from `code_after` and not from random clean code:
+
+The GBDT must learn what *fixes* look like, not just what vulnerable
+code looks like. Pairing the vulnerable method with its actual patched
+counterpart gives the model a hard counterexample for every CVE — same
+function name, same call-graph context, but the dangerous lines have
+been replaced. Random clean code would teach a much weaker boundary
+and produce a brittle classifier.
+
+We do *not* re-use `code_before` as an FP source because labelling the
+same code both ways collapses the supervision signal and overfits the
+model to the residual context lines.
 
 Output schema (per line):
-    {"code": str,                 # full method body (vulnerable side)
+    {"code":     str,                 # full method body (TP or FP side)
      "language": str,
-     "cve_id": str|None,
-     "cwe": str|None,
-     "severity": str,             # critical|high|medium|low
-     "filename": str|None,
+     "label":    "tp" | "fp",
      "ranges": [
-        {"line_start": int, "line_end": int}, ...   # method-relative, 1-indexed
-     ]}
+        {"line_start": int, "line_end": int}, ...   # method-relative
+     ],
+     "cve_id":   str|None,
+     "cwe":      str|None,            # only set on TP rows
+     "severity": str,                 # critical|high|medium|low
+     "filename": str|None}
 
 Defaults assume makina's repo layout:
     --db   third_party/datasets/cvefixes/CVEfixes.db
     --out  third_party/datasets/cvefixes/samples.jsonl
-
-Usage
------
-    python ml/scripts/converters/cvefixes.py
-    python ml/scripts/converters/cvefixes.py --langs Python Java
-    python ml/scripts/converters/cvefixes.py --limit 5000
 
 License: CVEfixes itself is CC BY 4.0 (Bhandari, Naseer, Moonen, 2021);
 see third_party/datasets/cvefixes/README.md for attribution details.
@@ -59,25 +65,36 @@ DEFAULT_OUT = REPO_ROOT / "third_party/datasets/cvefixes/samples.jsonl"
 
 
 SQL = """
-    SELECT mc.code,
-           mc.start_line,
-           mc.end_line,
+    SELECT vuln.code               AS vuln_code,
+           vuln.start_line          AS vuln_start,
+           vuln.end_line            AS vuln_end,
+           patched.code             AS patched_code,
+           patched.start_line       AS patched_start,
+           patched.end_line         AS patched_end,
            fc.diff_parsed,
-           fc.programming_language,
+           fc.programming_language  AS lang,
            fc.filename,
-           cwec.cwe_id,
-           fx.cve_id
-    FROM method_change mc
-    JOIN file_change fc ON mc.file_change_id = fc.file_change_id
+           cwec.cwe_id              AS cwe,
+           fx.cve_id                AS cve
+    FROM method_change vuln
+    JOIN method_change patched
+         ON patched.name = vuln.name
+        AND patched.signature = vuln.signature
+        AND patched.file_change_id = vuln.file_change_id
+        AND patched.before_change = 'False'
+    JOIN file_change fc ON vuln.file_change_id = fc.file_change_id
     JOIN fixes fx       ON fc.hash = fx.hash
     LEFT JOIN cwe_classification cwec ON fx.cve_id = cwec.cve_id
-    WHERE mc.before_change = 'True'
-      AND mc.code IS NOT NULL
-      AND mc.start_line IS NOT NULL
-      AND mc.end_line IS NOT NULL
+    WHERE vuln.before_change = 'True'
+      AND vuln.code    IS NOT NULL
+      AND patched.code IS NOT NULL
+      AND vuln.start_line IS NOT NULL
+      AND patched.start_line IS NOT NULL
       AND fc.diff_parsed IS NOT NULL
       AND fc.programming_language IN ({langs})
-      AND LENGTH(mc.code) BETWEEN ? AND ?
+      AND LENGTH(vuln.code)    BETWEEN ? AND ?
+      AND LENGTH(patched.code) BETWEEN ? AND ?
+    GROUP BY vuln.method_change_id
 """
 
 
@@ -107,13 +124,13 @@ def _cluster(nums: list[int], gap: int) -> list[tuple[int, int]]:
 
 
 def _to_method_ranges(
-    deleted: list, method_start: int, method_end: int, gap: int
+    diff_lines: list, method_start: int, method_end: int, gap: int
 ) -> list[tuple[int, int]]:
-    """Project file-relative deleted line numbers onto method-relative
-    coordinates, then cluster into ranges. Lines outside the method are
+    """Project file-relative diff line numbers onto method-relative
+    coordinates and cluster into ranges. Lines outside the method are
     dropped."""
     nums: list[int] = []
-    for entry in deleted:
+    for entry in diff_lines:
         if not isinstance(entry, (list, tuple)) or not entry:
             continue
         try:
@@ -125,12 +142,47 @@ def _to_method_ranges(
     return _cluster(nums, gap=gap)
 
 
-def _expand_range(
-    rng: tuple[int, int], total_lines: int, padding: int
-) -> tuple[int, int]:
-    """Add `padding` lines of context above and below, clamped to method bounds."""
+def _expand(rng: tuple[int, int], total_lines: int, padding: int) -> tuple[int, int]:
     lo, hi = rng
     return max(1, lo - padding), min(total_lines, hi + padding)
+
+
+def _emit(
+    fh,
+    code: str,
+    label: str,
+    ranges: list[tuple[int, int]],
+    lang: str,
+    cve: str | None,
+    cwe: str | None,
+    filename: str | None,
+    seen: set[str],
+    counters: dict,
+    padding: int,
+) -> bool:
+    """Emit one JSONL record. Returns True if written, False if deduped."""
+    key = hashlib.sha1((label + "\x00" + code).encode("utf-8")).hexdigest()
+    if key in seen:
+        counters["dedup"] += 1
+        return False
+    seen.add(key)
+
+    total_lines = code.count("\n") + 1
+    expanded = [_expand(r, total_lines, padding) for r in ranges]
+
+    rec = {
+        "code": code,
+        "language": lang,
+        "label": label,
+        "ranges": [{"line_start": lo, "line_end": hi} for lo, hi in expanded],
+        "cve_id": cve,
+        "cwe": cwe if label == "tp" else None,
+        "severity": _cwe_to_severity(cwe) if (label == "tp" and cwe) else "low",
+        "filename": filename,
+    }
+    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    counters[label] += 1
+    return True
 
 
 def main() -> int:
@@ -153,7 +205,7 @@ def main() -> int:
         "--gap",
         type=int,
         default=2,
-        help="merge deleted-line spans at most N lines apart",
+        help="merge diff line spans at most N lines apart",
     )
     ap.add_argument(
         "--padding",
@@ -162,7 +214,10 @@ def main() -> int:
         help="extra lines of context above/below each range (clamped to method)",
     )
     ap.add_argument(
-        "--limit", type=int, default=0, help="stop after N samples (0 = all)"
+        "--limit",
+        type=int,
+        default=0,
+        help="stop after N pairs (each pair emits up to 2 records); 0 = all",
     )
     args = ap.parse_args()
 
@@ -185,70 +240,95 @@ def main() -> int:
     lang_sql = ",".join(f"'{lang}'" for lang in args.langs)
     sql = SQL.format(langs=lang_sql)
 
-    written = 0
     seen: set[str] = set()
-    skipped_no_range = 0
-    skipped_dup = 0
-    skipped_lang = 0
-    skipped_parse = 0
+    counters = {"tp": 0, "fp": 0, "dedup": 0, "no_range": 0, "lang": 0, "parse": 0}
+    pairs_seen = 0
 
     with args.out.open("w", encoding="utf-8") as fh:
-        cur = conn.execute(sql, (args.min_len, args.max_len))
-        for code, start_line, end_line, diff_parsed, lang, filename, cwe, cve in cur:
+        cur = conn.execute(
+            sql, (args.min_len, args.max_len, args.min_len, args.max_len)
+        )
+        for (
+            vuln_code,
+            vuln_start,
+            vuln_end,
+            patched_code,
+            patched_start,
+            patched_end,
+            diff_parsed,
+            lang,
+            filename,
+            cwe,
+            cve,
+        ) in cur:
             lang_tag = _LANG_MAP.get(lang)
             if not lang_tag:
-                skipped_lang += 1
+                counters["lang"] += 1
                 continue
 
             try:
-                method_start = int(start_line)
-                method_end = int(end_line)
+                vs, ve = int(vuln_start), int(vuln_end)
+                ps, pe = int(patched_start), int(patched_end)
             except (TypeError, ValueError):
-                skipped_parse += 1
+                counters["parse"] += 1
                 continue
 
             parsed = _parse_diff(diff_parsed)
             if not parsed:
-                skipped_parse += 1
+                counters["parse"] += 1
                 continue
 
-            ranges = _to_method_ranges(
-                parsed.get("deleted") or [], method_start, method_end, args.gap
-            )
-            if not ranges:
-                skipped_no_range += 1
+            tp_ranges = _to_method_ranges(parsed.get("deleted") or [], vs, ve, args.gap)
+            fp_ranges = _to_method_ranges(parsed.get("added") or [], ps, pe, args.gap)
+
+            if not tp_ranges and not fp_ranges:
+                counters["no_range"] += 1
                 continue
 
-            total_lines = code.count("\n") + 1
-            ranges = [_expand_range(r, total_lines, args.padding) for r in ranges]
+            wrote_any = False
+            if tp_ranges:
+                wrote_any |= _emit(
+                    fh,
+                    vuln_code,
+                    "tp",
+                    tp_ranges,
+                    lang_tag,
+                    cve,
+                    cwe,
+                    filename,
+                    seen,
+                    counters,
+                    args.padding,
+                )
+            if fp_ranges:
+                wrote_any |= _emit(
+                    fh,
+                    patched_code,
+                    "fp",
+                    fp_ranges,
+                    lang_tag,
+                    cve,
+                    cwe,
+                    filename,
+                    seen,
+                    counters,
+                    args.padding,
+                )
 
-            key = hashlib.sha1(code.encode("utf-8")).hexdigest()
-            if key in seen:
-                skipped_dup += 1
-                continue
-            seen.add(key)
+            if wrote_any:
+                pairs_seen += 1
 
-            rec = {
-                "code": code,
-                "language": lang_tag,
-                "cve_id": cve,
-                "cwe": cwe,
-                "severity": _cwe_to_severity(cwe) if cwe else "medium",
-                "filename": filename,
-                "ranges": [{"line_start": lo, "line_end": hi} for lo, hi in ranges],
-            }
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            written += 1
-
-            if args.limit and written >= args.limit:
+            if args.limit and pairs_seen >= args.limit:
                 break
 
     conn.close()
+    total = counters["tp"] + counters["fp"]
     print(
-        f"wrote {written} samples → {args.out}\n"
-        f"  skipped: {skipped_no_range} (no in-range deletions), "
-        f"{skipped_dup} (dup code), {skipped_lang} (lang), "
-        f"{skipped_parse} (diff parse)"
+        f"wrote {total} samples ({counters['tp']} TP + {counters['fp']} FP) "
+        f"from {pairs_seen} pairs → {args.out}\n"
+        f"  skipped: {counters['no_range']} (no in-range edits), "
+        f"{counters['dedup']} (dup), {counters['lang']} (lang), "
+        f"{counters['parse']} (parse)"
     )
     return 0
 

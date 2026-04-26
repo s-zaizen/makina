@@ -144,14 +144,25 @@ excludes the downloaded artefacts. CVEfixes is CC BY 4.0 (Bhandari,
 Naseer, Moonen, 2021); see `third_party/datasets/README.md` for
 attribution policy.
 
-`ml/scripts/converters/cvefixes.py` extracts one record per vulnerable
-method (`method_change.before_change='True'`): the full method body
-plus the diff's deleted-line spans projected onto method-relative
-coordinates and clustered into ranges. Each record looks like
-`{code, language, ranges:[{line_start,line_end},…], cve_id, cwe,
-severity, filename}`.
+`ml/scripts/converters/cvefixes.py` walks `method_change` and emits
+**two records per CVE pair** keyed by `(name, signature, file_change_id)`:
 
-`bulk_import.py` then plays each record back as a Verify Submit:
+- a TP record from the vulnerable side (`before_change='True'`) — full
+  method body + the diff's deleted-line spans projected onto
+  method-relative coordinates;
+- an FP record from the patched side (`before_change='False'`) — full
+  patched method body + the diff's added-line spans on the patched
+  method's coordinates.
+
+Each record carries `{code, language, label:"tp"|"fp", ranges, cve_id,
+cwe, severity, filename}`. The patched method is used for FP rather
+than random clean code because re-using `code_before` as both classes
+would collapse the supervision signal and overfit the model to context
+lines that did not change. Pairing each vulnerable method with its own
+patched counterpart gives the GBDT a hard, semantically-meaningful
+counterexample for every CVE.
+
+`bulk_import.py` plays each record back as a Verify Submit:
 
 1. For every range, `POST /api/findings/manual` with the full method as
    `code` and the range as `(line_start, line_end)`. The backend embeds
@@ -160,7 +171,8 @@ severity, filename}`.
 2. `POST /api/verify/queue` bundles all findings under one case keyed
    by the CVE id.
 3. `POST /api/knowledge?skip_train=true` archives the case with every
-   finding labelled `tp` — without firing the per-submit retrain.
+   finding labelled by the record's `label` (`tp` or `fp`) — without
+   firing the per-submit retrain.
 
 After the batch, a single `POST /api/retrain` brings the GBDT up to
 date. This avoids a retrain stampede and keeps the training
@@ -169,10 +181,6 @@ embeddings rather than whole-method labels).
 
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.
-
-False-positive cases come from real scanner runs (the Verify tab) since
-their value depends on what the scanner actually flags; bulk import is
-TP-only seeding.
 
 ## Logging
 
