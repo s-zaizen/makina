@@ -123,6 +123,17 @@ RUN python -c "from transformers import AutoTokenizer, AutoModel; \
     AutoTokenizer.from_pretrained('microsoft/codebert-base', cache_dir='/opt/codebert-cache'); \
     AutoModel.from_pretrained('microsoft/codebert-base', cache_dir='/opt/codebert-cache')"
 
+# Pre-warm semgrep — first call parses the entire rule corpus and takes
+# 60+ seconds on a fresh container, which used to trip the API gateway
+# timeout. Running it once at build time materialises the parsed-rule
+# cache and the bytecode under ~/.cache so the runtime first call is
+# closer to a few hundred ms.
+RUN echo 'pass' > /tmp/warm.py \
+    && semgrep --config=/opt/semgrep-rules/python/lang/security \
+               --quiet --no-git-ignore --metrics=off /tmp/warm.py \
+       > /dev/null 2>&1 || true \
+    && rm -f /tmp/warm.py
+
 VOLUME ["/root/.makina"]
 EXPOSE 8080
 

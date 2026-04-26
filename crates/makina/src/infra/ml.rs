@@ -74,8 +74,12 @@ impl MlClient {
     }
 
     pub fn with_base_url(base_url: String) -> Self {
+        // 120 s — generous enough to swallow CodeBERT + semgrep cold-
+        // start work on a fresh Cloud Run revision. The previous 30 s
+        // budget repeatedly tripped on `/semgrep` because the CLI's
+        // first-call rule parse alone takes 60 s+.
         let http = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_default();
         Self { http, base_url }
