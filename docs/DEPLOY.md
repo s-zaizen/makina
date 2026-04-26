@@ -2,17 +2,37 @@
 
 The public deployment of `makina.sh` runs as a **single Cloud Run
 service** holding both the Rust API and the Python ML inside one
-container. The frontend is hosted separately on **Cloudflare Pages**
-(free) and points at the Cloud Run URL via `api.makina.sh`.
+container. The frontend is hosted separately on **Cloudflare Pages**,
+and `api.makina.sh` is a **Cloudflare Worker** reverse proxy that
+rewrites the `Host:` header before forwarding to Cloud Run. (Origin
+Rules host-header rewrite is Enterprise-only on Cloudflare; the Worker
+is the documented free-tier substitute.)
 
-```
-Cloudflare DNS ─┬─→ makina.sh        Pages (SvelteKit static build)
-                └─→ api.makina.sh    Cloud Run (Rust + Python ML)
-```
+See [`ARCHITECTURE.md`](ARCHITECTURE.md#public-deployment-topology)
+for the topology diagram.
 
 This document walks through the one-time GCP setup and the
 GitHub Actions secrets/vars the pipeline expects. Once configured,
 every push to `main` rebuilds and redeploys automatically.
+
+## Cloudflare Worker reverse proxy
+
+`worker/` holds a tiny (~20 lines) Cloudflare Worker bound to
+`api.makina.sh/*` that swaps the `Host:` header to the Cloud Run
+hostname before forwarding the request. Deploy it once from a clone
+of this repo:
+
+```bash
+cd worker
+npm install
+npx wrangler login           # one-time, opens browser
+npx wrangler deploy
+```
+
+Subsequent updates: edit `worker/src/index.js`, then
+`npx wrangler deploy`. CF DNS for `api.makina.sh` only needs *some*
+proxied record — once the Worker route binds, the request never
+leaves Cloudflare until the Worker calls `fetch()`.
 
 ---
 

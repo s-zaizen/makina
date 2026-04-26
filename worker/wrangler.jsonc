@@ -1,0 +1,19 @@
+{
+	"$schema": "https://json.schemastore.org/wrangler.json",
+	"name": "makina-api-proxy",
+	"main": "src/index.js",
+	"compatibility_date": "2025-01-01",
+
+	// Bind the Worker to api.makina.sh — every request to the
+	// hostname is routed through this proxy, regardless of path.
+	"routes": [
+		{
+			"pattern": "api.makina.sh/*",
+			"zone_name": "makina.sh"
+		}
+	],
+
+	"observability": {
+		"enabled": true
+	}
+}
