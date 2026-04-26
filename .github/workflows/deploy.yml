@@ -122,3 +122,33 @@ jobs:
           gcloud run services describe "${CR_SERVICE}" \
             --region "${GCP_REGION}" \
             --format='value(status.url)'
+
+  deploy-worker:
+    name: Deploy Cloudflare Worker (api proxy)
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://api.makina.sh
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: worker/package.json
+
+      - name: Install Wrangler
+        run: npm install
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          command: deploy
