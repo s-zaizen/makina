@@ -54,3 +54,4 @@ logs/
 
 # Claude Code runtime
 .claude/scheduled_tasks.lock
+bulk_import_logs/

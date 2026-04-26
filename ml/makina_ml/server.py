@@ -25,11 +25,15 @@ from pydantic import BaseModel
 import uvicorn
 
 from . import embedder, analyzer, semgrep_scanner
+from .flags import is_public_mode, setup_flags
 from .logging_config import reset_request_id, set_request_id, setup_logging
 from .services import training
 
 setup_logging()
+setup_flags()
 logger = logging.getLogger("makina_ml")
+if is_public_mode():
+    logger.info("public mode: /train is disabled")
 
 DB_PATH = Path(os.environ.get("MAKINA_DB", "/root/.makina/feedback.db"))
 MODEL_PATH = Path(os.environ.get("MAKINA_MODEL", "/root/.makina/model.json"))
@@ -105,6 +109,11 @@ class TrainRequest(BaseModel):
 @app.post("/train")
 def train(req: TrainRequest):
     """Retrain GBDT on all accumulated labels. Called after every Verify Submit."""
+    if is_public_mode():
+        raise HTTPException(
+            status_code=405,
+            detail="training disabled in public mode (frozen model)",
+        )
     try:
         import xgboost  # noqa: F401  — pre-flight; service raises if missing
     except ImportError:

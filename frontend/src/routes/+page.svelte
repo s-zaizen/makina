@@ -21,9 +21,16 @@
 	import { preloadHighlighter } from '$lib/highlighter';
 	import { readFolder, flatFiles } from '$lib/folder';
 	import { PLACEHOLDERS } from '$lib/placeholders';
+	import { PUBLIC_MODE } from '$lib/flags';
 	import type { Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode } from '$lib/types';
 
 	type Tab = 'scan' | 'verify' | 'knowledge' | 'model';
+
+	// Tabs that mutate the learning corpus are hidden in public deployments
+	// (the model is frozen, so Verify Submit / Model retrain have no effect).
+	const VISIBLE_TABS: readonly Tab[] = PUBLIC_MODE
+		? (['scan', 'knowledge'] as const)
+		: (['scan', 'verify', 'knowledge', 'model'] as const);
 
 	// ── State ────────────────────────────────────────────────────────────────────
 
@@ -248,7 +255,7 @@
 
 		<!-- Tabs -->
 		<nav class="flex items-center gap-1">
-			{#each (['scan', 'verify', 'knowledge', 'model'] as Tab[]) as tab}
+			{#each VISIBLE_TABS as tab}
 				<button
 					onclick={() => (activeTab = tab)}
 					class={[

@@ -1,5 +1,6 @@
 mod api;
 mod features;
+mod flags;
 mod infra;
 mod logging;
 mod store;
