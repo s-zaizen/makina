@@ -126,16 +126,29 @@ mkdir -p models/v1.0.9
 docker cp makina-ml-1:/tmp/model.json models/v1.0.9/model.json
 docker cp makina-ml-1:/tmp/metrics.json models/v1.0.9/metrics.json
 
-# 3. Bump the Dockerfile build-arg default so CI bakes the new model.
+# 3. Build the Knowledge-tab showcase DB. Public deployments disable
+#    the live Verify Submit path, so the runtime knowledge.db would
+#    otherwise be empty. seed_knowledge.py converts the same
+#    samples.jsonl we trained on into a populated SQLite, baked into
+#    the image alongside model.json.
+python3 ml/scripts/seed_knowledge.py \
+    --jsonl third_party/datasets/cvefixes/samples.jsonl \
+    --out   models/v1.0.9/knowledge.db
+
+# 4. Bump the Dockerfile build-arg default so CI bakes the new model.
 sed -i '' 's|MAKINA_MODEL_VERSION=v1\.0\.8|MAKINA_MODEL_VERSION=v1.0.9|' Dockerfile
 
-# 4. Commit + push via a working branch — main push triggers Cloud Run deploy
+# 5. Commit + push via a working branch — main push triggers Cloud Run deploy
 git checkout -b feat/model-v1.0.9
 git add models/v1.0.9 Dockerfile
 git commit -m "feat(model): bump to v1.0.9"
 git push -u origin feat/model-v1.0.9
 # … merge to main …
 ```
+
+In public mode `/api/stats` falls back to `metrics.json` when
+`feedback.db` is empty, so the Stats / Model tabs show the trained
+sample count instead of a confusing "0 labels, bootstrapping" state.
 
 `model.json` is small (~200 KB) so committing it is cheaper than
 running a separate object-store hop on every revision boot.

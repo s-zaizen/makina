@@ -160,6 +160,10 @@ COPY --from=backend-builder /build/target/release/makina /usr/local/bin/makina
 ARG MAKINA_MODEL_VERSION=v1.0.8
 COPY models/${MAKINA_MODEL_VERSION}/model.json /root/.makina/model.json
 COPY models/${MAKINA_MODEL_VERSION}/metrics.json /root/.makina/metrics.json
+# Knowledge showcase — pre-built DB so the Knowledge tab on makina.sh
+# has content even though public mode disables the live Verify Submit
+# write path.
+COPY models/${MAKINA_MODEL_VERSION}/knowledge.db /root/.makina/knowledge.db
 
 # Loopback wiring — the Rust core talks to the Python ML over 127.0.0.1
 # so nothing ML-internal is exposed to the public internet.
