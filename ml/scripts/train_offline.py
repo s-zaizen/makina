@@ -61,6 +61,15 @@ logger = logging.getLogger("train_offline")
 # ── Snippet construction (mirror /embed_with_graph) ─────────────────────────
 
 
+# Hard ceiling on the snippet we hand to the tokenizer. CodeBERT
+# truncates to 512 tokens (~ 2-4 KB of source) anyway, so 8 KB is
+# plenty of slack and protects us from the occasional CVEfixes method
+# with many large 1-hop callees that would otherwise blow the
+# tokenizer's working buffers (we hit OOM on a Docker host at
+# ~12.8 k findings without this cap).
+_MAX_SNIPPET_CHARS = 8000
+
+
 def _build_context_snippet(code: str, language: str, line_start: int) -> str:
     """Produce the same call-graph-augmented snippet that
     `/embed_with_graph` builds at runtime — keeps the offline-trained
@@ -73,17 +82,20 @@ def _build_context_snippet(code: str, language: str, line_start: int) -> str:
         lines = code.splitlines()
         ctx_s = max(0, line_start - 4)
         ctx_e = min(len(lines), line_start + 3)
-        return "\n".join(lines[ctx_s:ctx_e])
+        snippet = "\n".join(lines[ctx_s:ctx_e])
+        return snippet[:_MAX_SNIPPET_CHARS]
 
     functions = extract_functions(code, language)
     if functions:
-        return build_augmented_context(
+        snippet = build_augmented_context(
             functions, code, line_start, line_start, max_depth=1
         )
-    lines = code.splitlines()
-    ctx_s = max(0, line_start - 4)
-    ctx_e = min(len(lines), line_start + 3)
-    return "\n".join(lines[ctx_s:ctx_e])
+    else:
+        lines = code.splitlines()
+        ctx_s = max(0, line_start - 4)
+        ctx_e = min(len(lines), line_start + 3)
+        snippet = "\n".join(lines[ctx_s:ctx_e])
+    return snippet[:_MAX_SNIPPET_CHARS]
 
 
 # ── Sample expansion ────────────────────────────────────────────────────────
@@ -202,13 +214,27 @@ def main() -> int:
     t0 = time.perf_counter()
     batch = args.batch_size
     chunks: list[np.ndarray] = []
+    keep_indices: list[int] = []
     for i in range(0, len(snippets), batch):
         sub = snippets[i : i + batch]
-        embs = embedder.embed_batch(sub)
+        try:
+            embs = embedder.embed_batch(sub)
+        except Exception as e:
+            # Single bad batch shouldn't kill the whole run — log and
+            # skip the offending slice. Most often this is a memory
+            # spike on a pathological tokeniser input.
+            logger.warning(
+                "batch %d-%d failed (%s) — skipping",
+                i,
+                i + batch,
+                e,
+            )
+            continue
         if embs is None:
-            print(f"embed_batch returned None at index {i}", file=sys.stderr)
-            return 4
+            logger.warning("embed_batch returned None at index %d — skipping", i)
+            continue
         chunks.append(np.asarray(embs, dtype=np.float32))
+        keep_indices.extend(range(i, i + len(embs)))
         if (i // batch) % 50 == 0:
             done = min(i + batch, len(snippets))
             elapsed = time.perf_counter() - t0
@@ -221,17 +247,25 @@ def main() -> int:
                 rate,
                 remaining / 60,
             )
+    if not chunks:
+        print("no batches succeeded", file=sys.stderr)
+        return 4
     embeddings = np.vstack(chunks)
+    # Align labels / groups with the rows that actually made it through.
+    kept_labels = [labels[k] for k in keep_indices]
+    kept_groups = [groups[k] for k in keep_indices]
+    skipped = len(snippets) - len(keep_indices)
     logger.info(
-        "embedded %d snippets in %.1fs (%.1f /s)",
-        len(snippets),
+        "embedded %d snippets in %.1fs (%.1f /s, %d skipped)",
+        len(keep_indices),
         time.perf_counter() - t0,
-        len(snippets) / max(1e-3, time.perf_counter() - t0),
+        len(keep_indices) / max(1e-3, time.perf_counter() - t0),
+        skipped,
     )
 
     # ── 4. Train + persist ──────────────────────────────────────────────
     result = training.train_from_arrays(
-        embeddings, labels, groups, args.model_path, args.metrics_path
+        embeddings, kept_labels, kept_groups, args.model_path, args.metrics_path
     )
     print(json.dumps(result, indent=2))
     return 0 if result.get("ok") else 1
