@@ -26,10 +26,11 @@
 
 	type Tab = 'scan' | 'verify' | 'knowledge' | 'model';
 
-	// Tabs that mutate the learning corpus are hidden in public deployments
-	// (the model is frozen, so Verify Submit / Model retrain have no effect).
+	// Verify is hidden in public deployments (model is frozen, so Submit
+	// has no effect). Scan / Knowledge / Model stay visible — Model is
+	// read-only metrics, useful for showcasing how the GBDT looks.
 	const VISIBLE_TABS: readonly Tab[] = PUBLIC_MODE
-		? (['scan', 'knowledge'] as const)
+		? (['scan', 'knowledge', 'model'] as const)
 		: (['scan', 'verify', 'knowledge', 'model'] as const);
 
 	// ── State ────────────────────────────────────────────────────────────────────
