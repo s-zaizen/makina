@@ -108,41 +108,42 @@ def _eval_metrics(model, x_val, y_val) -> dict:
     }
 
 
-def train(db_path: Path, model_path: Path, metrics_path: Path) -> dict:
-    """Retrain the GBDT from scratch on every label currently in
-    `db_path`. Returns the JSON body the route should serialise back
-    to the caller. Raises only on missing xgboost (the route layer
-    surfaces that as an HTTP 500)."""
+def train_from_arrays(
+    embeddings: np.ndarray,
+    labels: list[str],
+    groups: list[str | None],
+    model_path: Path,
+    metrics_path: Path,
+) -> dict:
+    """Train the GBDT directly from in-memory arrays.
+
+    `embeddings` is an N×768 float32 matrix, `labels[i]` is `"tp"`/`"fp"`,
+    `groups[i]` is the CVE id (or None). Used by both the SQLite-backed
+    `train()` route and by the offline trainer that bypasses the API.
+    Caller is responsible for ensuring xgboost / sklearn are importable.
+    """
     import xgboost as xgb  # noqa: F401  — verify import early
 
-    if not db_path.exists():
-        logger.info("train skipped: no database yet")
-        return {"ok": False, "reason": "no database yet", "samples": 0}
+    if embeddings.shape[0] == 0:
+        return {"ok": False, "reason": "no samples", "samples": 0}
 
-    rows = _load_dataset(db_path)
-
-    x_list: list[np.ndarray] = []
-    y_list: list[int] = []
-    groups: list[str | None] = []
-    for fv_bytes, label, group_key in rows:
-        fv = np.frombuffer(fv_bytes, dtype="<f4")
-        if len(fv) == 768:
-            x_list.append(fv)
-            y_list.append(1 if label == "tp" else 0)
-            groups.append(group_key)
+    y_list = [1 if lbl == "tp" else 0 for lbl in labels]
 
     if len(set(y_list)) < 2:
         logger.info(
             "train skipped: single-class",
-            extra={"samples": len(x_list), "stage": model_stage(len(x_list))},
+            extra={
+                "samples": len(y_list),
+                "stage": model_stage(len(y_list)),
+            },
         )
         return {
             "ok": False,
             "reason": "need both TP and FP labels",
-            "samples": len(x_list),
+            "samples": len(y_list),
         }
 
-    x_arr = np.array(x_list)
+    x_arr = embeddings.astype(np.float32)
     y_arr = np.array(y_list)
     tp_count = int(y_arr.sum())
     fp_count = int(len(y_arr) - tp_count)
@@ -195,10 +196,10 @@ def train(db_path: Path, model_path: Path, metrics_path: Path) -> dict:
 
     metrics = {
         "trained_at": datetime.now(timezone.utc).isoformat(),
-        "samples": len(x_list),
+        "samples": len(y_list),
         "tp": tp_count,
         "fp": fp_count,
-        "stage": model_stage(len(x_list)),
+        "stage": model_stage(len(y_list)),
         "elapsed_ms": elapsed_ms,
         "split": (
             "80/20 group (CVE-aware)"
@@ -219,10 +220,39 @@ def train(db_path: Path, model_path: Path, metrics_path: Path) -> dict:
 
     return {
         "ok": True,
-        "samples": len(x_list),
+        "samples": len(y_list),
         "model_path": str(model_path),
         **(val_metrics or {}),
     }
+
+
+def train(db_path: Path, model_path: Path, metrics_path: Path) -> dict:
+    """Retrain the GBDT from scratch on every label currently in
+    `db_path`. Returns the JSON body the route should serialise back
+    to the caller. Raises only on missing xgboost (the route layer
+    surfaces that as an HTTP 500)."""
+    import xgboost as xgb  # noqa: F401  — verify import early
+
+    if not db_path.exists():
+        logger.info("train skipped: no database yet")
+        return {"ok": False, "reason": "no database yet", "samples": 0}
+
+    rows = _load_dataset(db_path)
+
+    x_list: list[np.ndarray] = []
+    labels: list[str] = []
+    groups: list[str | None] = []
+    for fv_bytes, label, group_key in rows:
+        fv = np.frombuffer(fv_bytes, dtype="<f4")
+        if len(fv) == 768:
+            x_list.append(fv)
+            labels.append(label)
+            groups.append(group_key)
+
+    if not x_list:
+        return {"ok": False, "reason": "no samples", "samples": 0}
+
+    return train_from_arrays(np.array(x_list), labels, groups, model_path, metrics_path)
 
 
 def read_metrics(metrics_path: Path) -> dict | None:
