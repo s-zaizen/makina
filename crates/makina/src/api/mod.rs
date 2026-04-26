@@ -126,9 +126,7 @@ mod tests {
         // We don't set MAKINA_HOME, so the handler will 500 from store
         // failures — but that proves the route IS reachable, which is
         // exactly what we want to test here.
-        let flags = Flags {
-            public_mode: false,
-        };
+        let flags = Flags { public_mode: false };
         let status = status_for(flags, "POST", "/api/feedback").await;
         assert_ne!(
             status,
