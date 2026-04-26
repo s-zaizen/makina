@@ -211,30 +211,39 @@ def main() -> int:
             print("CodeBERT failed to load within 120 s", file=sys.stderr)
             return 3
 
+    # Stream embeddings to a numpy memmap so a mid-run crash doesn't
+    # wipe earlier progress. After all batches are done we slice the
+    # memmap down to the rows that actually got written.
+    import gc
+
+    embeds_path = args.model_path.parent / "_embeds.npy"
+    embeds_path.parent.mkdir(parents=True, exist_ok=True)
+    mm = np.memmap(embeds_path, dtype=np.float32, mode="w+", shape=(len(snippets), 768))
+
     t0 = time.perf_counter()
     batch = args.batch_size
-    chunks: list[np.ndarray] = []
     keep_indices: list[int] = []
     for i in range(0, len(snippets), batch):
         sub = snippets[i : i + batch]
         try:
             embs = embedder.embed_batch(sub)
         except Exception as e:
-            # Single bad batch shouldn't kill the whole run — log and
-            # skip the offending slice. Most often this is a memory
-            # spike on a pathological tokeniser input.
-            logger.warning(
-                "batch %d-%d failed (%s) — skipping",
-                i,
-                i + batch,
-                e,
-            )
+            logger.warning("batch %d-%d failed (%s) — skipping", i, i + batch, e)
+            gc.collect()
             continue
         if embs is None:
             logger.warning("embed_batch returned None at index %d — skipping", i)
+            gc.collect()
             continue
-        chunks.append(np.asarray(embs, dtype=np.float32))
-        keep_indices.extend(range(i, i + len(embs)))
+        arr = np.asarray(embs, dtype=np.float32)
+        mm[i : i + arr.shape[0]] = arr
+        keep_indices.extend(range(i, i + arr.shape[0]))
+        # Free intermediate tensors aggressively — Docker Desktop's
+        # default 4 GB cap leaves little headroom on top of CodeBERT's
+        # ~500 MB resident model.
+        del embs, arr
+        if (i // batch) % 100 == 0:
+            gc.collect()
         if (i // batch) % 50 == 0:
             done = min(i + batch, len(snippets))
             elapsed = time.perf_counter() - t0
@@ -247,14 +256,19 @@ def main() -> int:
                 rate,
                 remaining / 60,
             )
-    if not chunks:
+    if not keep_indices:
         print("no batches succeeded", file=sys.stderr)
         return 4
-    embeddings = np.vstack(chunks)
+    # Slice the memmap down to the rows that were actually written.
+    keep_arr = np.array(keep_indices, dtype=np.int64)
+    embeddings = np.asarray(mm[keep_arr])
     # Align labels / groups with the rows that actually made it through.
     kept_labels = [labels[k] for k in keep_indices]
     kept_groups = [groups[k] for k in keep_indices]
     skipped = len(snippets) - len(keep_indices)
+    # Drop the memmap from RAM before the GBDT fit; the file stays on
+    # disk for inspection and is GC'd by the temp cleanup.
+    del mm
     logger.info(
         "embedded %d snippets in %.1fs (%.1f /s, %d skipped)",
         len(keep_indices),

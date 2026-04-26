@@ -1,0 +1,15 @@
+{
+  "trained_at": "2026-04-26T15:34:30.581253+00:00",
+  "samples": 19209,
+  "tp": 9212,
+  "fp": 9997,
+  "stage": "mature",
+  "elapsed_ms": 3883,
+  "split": "80/20 group (CVE-aware)",
+  "val_samples": 4124,
+  "val_accuracy": 0.5133,
+  "val_precision": 0.4978,
+  "val_recall": 0.3383,
+  "val_prob_mean_tp": 0.4779,
+  "val_prob_mean_fp": 0.4701
+}

@@ -337,10 +337,14 @@ End-to-end on the v1.0.8 corpus (~14 k samples / ~19 k findings):
 | `train_offline.py` (in-process, batched) | 25–35 min  | 5–10 min    |
 
 The HTTP-less path is what bakes the production model: train locally,
-upload `model.json` to `gs://makina-prod-models/`, and Cloud Run's
-entrypoint pulls it on container boot (see `CONTRIBUTING.md` →
-*Shipping a Frozen Model to Production*). Public deployments never
-expose `/train`, so this is the only way the prod model gets refreshed.
+drop `model.json` into `models/v<version>/`, and the Dockerfile's
+`cloudrun` stage `COPY`s it into `/root/.makina/model.json` at build
+time. The entrypoint just confirms the file is present — no runtime
+download, no extra dependencies. Bumping `MAKINA_MODEL_VERSION` in the
+Dockerfile (or via `--build-arg` in CI) is the official way to swap
+in a re-trained model. See `CONTRIBUTING.md` → *Shipping a Frozen
+Model to Production*. Public deployments never expose `/train`, so
+this build-time bake is the only way the prod model gets refreshed.
 
 ## Logging
 

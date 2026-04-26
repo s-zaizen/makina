@@ -98,8 +98,7 @@ RUN pip install --no-cache-dir \
     "tree-sitter-languages==1.10.2" \
     "python-json-logger>=2.0.7" \
     "openfeature-sdk>=0.7.0" \
-    "pytest>=8.0.0" \
-    "google-cloud-storage>=2.14.0"
+    "pytest>=8.0.0"
 
 RUN git clone --depth 1 --filter=blob:none --sparse \
         https://github.com/semgrep/semgrep-rules.git /opt/semgrep-rules \
@@ -155,13 +154,21 @@ FROM ml AS cloudrun
 # as the standalone backend stage so logs/paths stay identical.
 COPY --from=backend-builder /build/target/release/makina /usr/local/bin/makina
 
+# Bake the frozen GBDT into the image. Bumping MAKINA_MODEL_VERSION is
+# the official way to ship a re-trained model: change the build arg,
+# push, CI deploys a new Cloud Run revision with the new model loaded.
+ARG MAKINA_MODEL_VERSION=v1.0.8
+COPY models/${MAKINA_MODEL_VERSION}/model.json /root/.makina/model.json
+COPY models/${MAKINA_MODEL_VERSION}/metrics.json /root/.makina/metrics.json
+
 # Loopback wiring — the Rust core talks to the Python ML over 127.0.0.1
 # so nothing ML-internal is exposed to the public internet.
 ENV ML_PORT=8081 \
     MAKINA_ML_URL=http://127.0.0.1:8081 \
     MAKINA_PUBLIC_MODE=true \
     RUST_LOG=info \
-    MAKINA_LOG_LEVEL=info
+    MAKINA_LOG_LEVEL=info \
+    MAKINA_MODEL_VERSION=${MAKINA_MODEL_VERSION}
 
 COPY ml/scripts/cloudrun-entrypoint.sh /usr/local/bin/cloudrun-entrypoint.sh
 RUN chmod +x /usr/local/bin/cloudrun-entrypoint.sh

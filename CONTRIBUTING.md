@@ -104,33 +104,41 @@ docker compose exec -T ml python3 /ml/scripts/run_ablations.py \
 ## Shipping a Frozen Model to Production
 
 The public Cloud Run deployment runs in `MAKINA_PUBLIC_MODE=true`, so
-on-line learning is disabled. To give it a baseline GBDT to blend with
-the heuristic score, train locally with `train_offline.py` and upload
-the resulting `model.json` to the dedicated GCS bucket:
+on-line learning is disabled. To give it a baseline GBDT to blend
+with the heuristic score, train locally with `train_offline.py` and
+**check the artefacts into `models/v<version>/`**. The Dockerfile's
+`cloudrun` stage `COPY`s them into the image at build time, so the
+running container always has `/root/.makina/model.json` available
+without any runtime download.
 
 ```bash
-# 1. Train (see above) — produces /tmp/model.json inside the ml container
-docker cp makina-ml-1:/tmp/model.json /tmp/model.json
-docker cp makina-ml-1:/tmp/metrics.json /tmp/metrics.json
+# 1. Train — produces /tmp/model.json inside the ml container
+docker cp third_party/datasets/cvefixes/samples.jsonl makina-ml-1:/tmp/
+docker compose exec -T ml python3 /ml/scripts/train_offline.py \
+    --jsonl /tmp/samples.jsonl \
+    --model-path /tmp/model.json \
+    --metrics-path /tmp/metrics.json \
+    --batch-size 8
 
-# 2. Upload to GCS — Cloud Run's entrypoint downloads from this bucket
-gcloud storage cp /tmp/model.json gs://makina-prod-models/model.json
-gcloud storage cp /tmp/metrics.json gs://makina-prod-models/metrics.json
+# 2. Stage the artefacts under a fresh version directory.
+#    Naming follows the source CVEfixes release (e.g. v1.0.8).
+mkdir -p models/v1.0.9
+docker cp makina-ml-1:/tmp/model.json models/v1.0.9/model.json
+docker cp makina-ml-1:/tmp/metrics.json models/v1.0.9/metrics.json
 
-# 3. Roll a Cloud Run revision so the new model is picked up at boot
-gcloud run services update makina-api --region=asia-northeast1 \
-    --update-env-vars MAKINA_MODEL_VERSION=$(date +%Y%m%d)
+# 3. Bump the Dockerfile build-arg default so CI bakes the new model.
+sed -i '' 's|MAKINA_MODEL_VERSION=v1\.0\.8|MAKINA_MODEL_VERSION=v1.0.9|' Dockerfile
+
+# 4. Commit + push via a working branch — main push triggers Cloud Run deploy
+git checkout -b feat/model-v1.0.9
+git add models/v1.0.9 Dockerfile
+git commit -m "feat(model): bump to v1.0.9"
+git push -u origin feat/model-v1.0.9
+# … merge to main …
 ```
 
-The `MAKINA_MODEL_VERSION` env-var bump is just a no-op annotation that
-forces Cloud Run to roll a new revision. The container's entrypoint
-calls `google-cloud-storage` against the bucket using Application
-Default Credentials (the runtime compute SA has `roles/storage.objectViewer`
-granted as part of one-time setup).
-
-`model.json` itself is **not committed to git** — it's a build-derived
-artefact that lives in the GCS bucket. Re-train locally and re-upload
-to swap in a new model.
+`model.json` is small (~200 KB) so committing it is cheaper than
+running a separate object-store hop on every revision boot.
 
 ## Project Layout
 
