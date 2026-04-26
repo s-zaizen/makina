@@ -45,6 +45,23 @@ To activate the git-side pre-push hook for manual pushes (one-time per clone):
 git config core.hooksPath .claude/hooks
 ```
 
+## Branch Rules
+
+**Never push directly to `main`.** A push to `main` triggers the Cloud
+Run deploy workflow and ships a new revision to production at
+`makina.sh` immediately. Every change goes via a working branch + PR:
+
+```bash
+git checkout -b dev/<short-topic>     # or feat/, fix/, refactor/, etc.
+# … commits …
+git push -u origin <branch>
+gh pr create --base main
+```
+
+When the user asks for a one-line fix, still open a PR — never `git
+push origin main`. Force-pushing to a working branch is fine; force-
+pushing to `main` is not.
+
 ## Commit Rules
 
 Follow Conventional Commits — **one-line message, no body**:

@@ -192,12 +192,29 @@ docs: document continuous learning architecture
 When a commit changes something they describe — API routes, directory layout, toolchain, scopes, workflows — update those files **in the same commit**.
 Standalone docs-only commits exist only for documentation that is truly independent of any code change.
 
-## Pull Request Guidelines
+## Branch Workflow
 
-- One logical change per PR
-- Title follows the same `type(scope): summary` convention
-- Link to relevant issue if one exists
-- All services should still build: `docker compose up -d` must succeed
+**Never push directly to `main`.** Every push to `main` triggers
+`.github/workflows/deploy.yml`, which rebuilds the Cloud Run image and
+rolls a new revision into production at `makina.sh`. Direct commits
+short-circuit review and CI gating.
+
+The flow is:
+
+1. Create a working branch off `main`:
+   ```bash
+   git checkout -b dev/<short-topic>          # personal scratch
+   # or
+   git checkout -b feat/<scope>-<summary>     # shared feature branch
+   ```
+2. Commit, push to the branch, open a PR against `main`.
+3. Let CI go green (lint + tests on Rust / Python / frontend).
+4. Squash or merge — production deploys on merge.
+
+`main` is the production deploy line. Treat it as protected even when
+GitHub branch protection isn't configured. For one-off fixes that
+need to ship now, still go through a one-commit PR — the audit trail
+is worth the 30 seconds.
 
 ## Testing
 
